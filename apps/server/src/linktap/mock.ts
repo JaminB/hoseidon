@@ -62,11 +62,11 @@ export interface MockOptions {
 
 /**
  * The real API's limits as observed/documented (not Hoseidon's safety-padded spacing).
- * getWateringStatus is enforced account-wide here, matching how Hoseidon treats it.
+ * getWateringStatus is enforced per taplinker here, matching the live API.
  */
 export const MOCK_API_LIMITS: Record<Bucket, { intervalMs: number; perTaplinker?: boolean }> = {
   devices: { intervalMs: 5 * 60_000 },
-  status: { intervalMs: 30_000 },
+  status: { intervalMs: 30_000, perTaplinker: true },
   history: { intervalMs: 10 * 60_000, perTaplinker: true },
   command: { intervalMs: 15_000 },
 };

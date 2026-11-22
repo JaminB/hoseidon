@@ -343,21 +343,19 @@ The records are under **`status`** (an array), not `history`/`data`:
 
 ## Rate limits
 
-| Call                                            | Minimum interval     | Hoseidon bucket                     |
-| ----------------------------------------------- | -------------------- | ----------------------------------- |
-| `getAllDevices`                                 | 5 min                | `devices`, account-wide             |
-| Commands (`activate*`, `pause`, `dismissAlarm`) | 15 s                 | `command`, account-wide             |
-| `getWateringHistory`                            | 10 min               | `history`, per taplinker            |
-| `getWateringStatus`                             | 30 s (verified live) | `status`, account-wide, spaced 31 s |
+| Call                                            | Minimum interval     | Hoseidon bucket                      |
+| ----------------------------------------------- | -------------------- | ------------------------------------ |
+| `getAllDevices`                                 | 5 min                | `devices`, account-wide              |
+| Commands (`activate*`, `pause`, `dismissAlarm`) | 15 s                 | `command`, account-wide              |
+| `getWateringHistory`                            | 10 min               | `history`, per taplinker             |
+| `getWateringStatus`                             | 30 s (verified live) | `status`, per taplinker, spaced 31 s |
 
 `getWateringStatus` scope: in the live test, a status call for outlet 1 failed with the 30 s
 message 18 s after outlet 1's previous call (in the same second as a successful call for outlet
 2), and outlet 2 failed 15 s after its own previous call. Later, two different outlets succeeded
-in the same second, each at least 30 s after its own last call. That pattern also fits a
-**per-taplinker** 30 s limit, but the sample is small, so Hoseidon spaces status calls
-**account-wide** at 31 s, which can never trip either reading. If more captures confirm
-per-taplinker, add `status` to `PER_TAPLINKER_BUCKETS` in `client.ts` (and `perTaplinker` in the
-mock's `MOCK_API_LIMITS`).
+in the same second, each at least 30 s after its own last call. So the limit is
+**per taplinker**: Hoseidon gives each outlet its own status lane, spaced 31 s
+(`status` is in `PER_TAPLINKER_BUCKETS` in `client.ts`; `perTaplinker` in the mock).
 
 The limits are set in `LINKTAP_LIMITS` (`client.ts`). The queue (`rate-limit.ts`) handles them as
 follows:
@@ -482,8 +480,8 @@ local-gateway executor.
 | REST and webhook routes                             | `apps/server/src/api/`                  |
 | Start and verify (`startVerified`, `CloudExecutor`) | `apps/server/src/schedule/executor.ts`  |
 
-**Status polling.** One account-wide status call per 31 s, so running outlets take turns (least
-recently polled first, one per tick). When a poll sees a run end, the poller fetches that
+**Status polling.** Each running outlet is polled at most once per 31 s (its own lane), least
+recently polled first; outlets whose lane is still cooling down are skipped until the next tick. When a poll sees a run end, the poller fetches that
 outlet's history 5 s later (if its 10-minute history slot is free) to fill in the real volume.
 
 **Starting a scheduled run** (`startVerified`):

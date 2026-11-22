@@ -126,17 +126,23 @@ describe('LinkTap client against the mock', () => {
     expect(cmds[1]!.at - cmds[0]!.at).toBeGreaterThanOrEqual(15_000);
   });
 
-  it('spaces getWateringStatus account-wide (31 s) across taplinkers', async () => {
+  it('limits getWateringStatus per taplinker: two outlets at once, same outlet 31 s apart', async () => {
     vi.useFakeTimers();
     const { client, mock } = setup({ realLimits: true });
     const dripA = { gatewayId: MOCK_IDS.backyard, taplinkerId: MOCK_IDS.dripA };
-    const both = Promise.all([client.getWateringStatus(lawn), client.getWateringStatus(dripA)]);
-    await vi.advanceTimersByTimeAsync(31_000);
-    await both;
-    const calls = mock.calls.filter((c) => c.endpoint === 'getWateringStatus');
+    await Promise.all([client.getWateringStatus(lawn), client.getWateringStatus(dripA)]);
+    let calls = mock.calls.filter((c) => c.endpoint === 'getWateringStatus');
     expect(calls).toHaveLength(2);
-    expect(calls[1]!.at - calls[0]!.at).toBeGreaterThanOrEqual(31_000);
-    expect(client.nextAvailableAt('status').getTime() - Date.now()).toBe(31_000);
+    expect(calls[1]!.at - calls[0]!.at).toBeLessThan(1_000);
+    expect(client.nextAvailableAt('status', MOCK_IDS.frontLawn).getTime() - Date.now()).toBe(
+      31_000,
+    );
+    const again = client.getWateringStatus(lawn);
+    await vi.advanceTimersByTimeAsync(31_000);
+    await again;
+    calls = mock.calls.filter((c) => c.endpoint === 'getWateringStatus');
+    expect(calls).toHaveLength(3);
+    expect(calls[2]!.at - calls[0]!.at).toBeGreaterThanOrEqual(31_000);
   });
 
   it('limits getWateringHistory per taplinker: two outlets back to back are fine', async () => {
@@ -167,7 +173,7 @@ describe('LinkTap client against the mock', () => {
     expect(isRateLimitMessage('Gateway is offline')).toBe(false);
   });
 
-  it('the enforcing mock rejects a second status call within 30 s for ANY taplinker', () => {
+  it('the enforcing mock limits status per taplinker (30 s), like the live API', () => {
     let t = 0;
     const mock = new LinkTapMock({ now: () => t, seedRunning: false });
     const body = (taplinkerId: string) => ({
@@ -181,12 +187,17 @@ describe('LinkTap client against the mock', () => {
       status: null,
     });
     t = 1_000;
-    expect(mock.handle('getWateringStatus', body(MOCK_IDS.dripB))).toEqual({
+    // A different outlet in the same window is fine...
+    expect(mock.handle('getWateringStatus', body(MOCK_IDS.dripB))).toMatchObject({
+      result: 'ok',
+    });
+    // ...but the same outlet again within 30 s is rejected with the live message.
+    expect(mock.handle('getWateringStatus', body(MOCK_IDS.dripA))).toEqual({
       result: 'error',
       message: 'The minimum interval of calling this API is 30 seconds.',
     });
     t = 30_000;
-    expect(mock.handle('getWateringStatus', body(MOCK_IDS.dripB))).toMatchObject({
+    expect(mock.handle('getWateringStatus', body(MOCK_IDS.dripA))).toMatchObject({
       result: 'ok',
     });
     // History is per taplinker.

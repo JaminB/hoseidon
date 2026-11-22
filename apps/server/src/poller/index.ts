@@ -14,7 +14,7 @@ export interface PollerIntervals {
 }
 
 /**
- * Matches LinkTap's limits: getAllDevices 5 min, status 31 s (account-wide, while something
+ * Matches LinkTap's limits: getAllDevices 5 min, status 31 s (per outlet, while something
  * runs), history 10 min. A finished run shows up in history about a second after it ends.
  */
 export const DEFAULT_INTERVALS: PollerIntervals = {
@@ -53,7 +53,7 @@ export class Poller {
   /** Last history attempt per device (success or not), so one failing device can't hog the turn. */
   private readonly historyAttempts = new Map<string, number>();
   private readonly busy = new Set<Task>();
-  /** Last status poll per device, so running outlets take turns at the account-wide limit. */
+  /** Last status poll per device, so outlets are polled least-recently-first. */
   private readonly statusPolledAt = new Map<string, number>();
   private readonly reconcileTimers = new Set<NodeJS.Timeout>();
   private readonly last: PollerStatus['last'] = {
@@ -139,8 +139,9 @@ export class Poller {
       active.sort((a, b) => polledAt(a.id) - polledAt(b.id));
 
       let failure: unknown;
-      for (const [i, d] of active.entries()) {
-        if (i > 0 && client.nextAvailableAt('status').getTime() > Date.now()) break;
+      for (const d of active) {
+        // Each outlet has its own 30 s status lane; skip outlets whose lane is still cooling down.
+        if (client.nextAvailableAt('status', d.id).getTime() > Date.now()) continue;
         this.statusPolledAt.set(d.id, Date.now());
         try {
           const sampledAt = new Date();
@@ -155,7 +156,7 @@ export class Poller {
             this.opts.log?.(`poller status: rate limited, retrying next tick (${d.id})`);
             // Let this device go first next time.
             this.statusPolledAt.set(d.id, 0);
-            break;
+            continue;
           }
           failure ??= err;
         }

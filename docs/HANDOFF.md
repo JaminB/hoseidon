@@ -457,8 +457,8 @@ Real 1-minute instant runs on a 4-outlet ValveLinker. Details in `docs/linktap-a
 `getWateringStatus.{running,finished,rate-limited}.json`.
 
 - `getWateringStatus` is limited to one call per 30 s ("The minimum interval of calling this API
-  is 30 seconds."). The status bucket is now account-wide at 31 s (`LINKTAP_LIMITS`), the
-  conservative reading; the log also fits a per-taplinker limit, see the doc. History is now
+  is 30 seconds."). The limit is per taplinker (two outlets succeeded in the same second), so
+  `status` is in `PER_TAPLINKER_BUCKETS`, spaced 31 s per outlet. History is now
   limited per taplinker (`PER_TAPLINKER_BUCKETS`); `nextAvailableAt('history')` without an id
   reports the earliest lane.
 - `RateLimiter` was rewritten around an explicit queue: `priority` calls jump queued ones (and a
@@ -481,7 +481,7 @@ Real 1-minute instant runs on a 4-outlet ValveLinker. Details in `docs/linktap-a
   the start's send time as the run's `startedAt`.
 - Client bodies match the live ones: start sends `durationSec` only when non-zero and `eco*` only
   for cycle-and-soak; stop is exactly `{gatewayId, taplinkerId, action:false, duration:0}`.
-- Mock: `MOCK_API_LIMITS` (status 30 s account-wide with the live message, history per
+- Mock: `MOCK_API_LIMITS` (status 30 s per taplinker with the live message, history per
   taplinker), live string-valued status, `{dur}` after a run, `startLatencyMs`, and commands answer
   `{"result":"ok","message":"success"}`.
 

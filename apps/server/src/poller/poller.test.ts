@@ -173,7 +173,7 @@ describe('Poller against the mock', () => {
     expect(openRun(h.db, MOCK_IDS.frontLawn)).toBeUndefined();
   });
 
-  it('running outlets take turns at the account-wide status limit', async () => {
+  it('polls every running outlet each tick, each at most once per 31 s', async () => {
     const h = harness({ realLimits: true });
     // Front Lawn is already running (seeded); start Drip A too, then let the poller see both.
     await h.client.startWatering({
@@ -186,15 +186,14 @@ describe('Poller against the mock', () => {
       h.mock.calls.filter((c) => c.endpoint === 'getWateringStatus').map((c) => c.body.taplinkerId);
 
     await h.poller.pollRunning();
-    expect(polled()).toHaveLength(1);
-    await vi.advanceTimersByTimeAsync(31_000);
+    expect(new Set(polled())).toEqual(new Set([MOCK_IDS.frontLawn, MOCK_IDS.dripA]));
+    // A tick inside the 31 s window skips both outlets instead of tripping the limit.
+    await vi.advanceTimersByTimeAsync(10_000);
     await h.poller.pollRunning();
-    await vi.advanceTimersByTimeAsync(31_000);
+    expect(polled()).toHaveLength(2);
+    await vi.advanceTimersByTimeAsync(21_000);
     await h.poller.pollRunning();
-    const seen = polled();
-    expect(seen).toHaveLength(3);
-    expect(new Set(seen.slice(0, 2))).toEqual(new Set([MOCK_IDS.frontLawn, MOCK_IDS.dripA]));
-    expect(seen[2]).toBe(seen[0]);
+    expect(polled()).toHaveLength(4);
     // The enforcing mock never had to reject a call.
     expect(h.poller.status().last.status.error).toBeNull();
   });
