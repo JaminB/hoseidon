@@ -12,9 +12,9 @@ import {
 } from '../db/schema';
 import type { HistoryEntry, NormalizedGateway } from '../linktap/normalize';
 import { baseId } from '../linktap/normalize';
+import { readWeakSignalPct } from '../network/settings';
 
 export const THRESHOLDS = {
-  signalLowPct: 30,
   batteryLowPct: 20,
 };
 
@@ -49,6 +49,7 @@ export function ingestDevices(db: Db, polled: NormalizedGateway[], now: Date): N
     derived.push({ at: now, source: 'poller', ...e });
 
   db.transaction((tx) => {
+    const weakSignalPct = readWeakSignalPct(tx);
     for (const gw of polled) {
       const prev = tx.select().from(gateways).where(eq(gateways.id, gw.id)).get();
       const values = {
@@ -124,7 +125,7 @@ export function ingestDevices(db: Db, polled: NormalizedGateway[], now: Date): N
           .run();
 
         syncRunWithWatering(tx, t.id, t.watering, now);
-        if (old) deriveDeviceEvents(old, { ...set, id: t.id }, now, ev);
+        if (old) deriveDeviceEvents(old, { ...set, id: t.id }, now, ev, weakSignalPct);
       }
     }
     // Same transaction: if the events fail, the state change rolls back and the next poll
@@ -144,6 +145,7 @@ function deriveDeviceEvents(
   cur: DeviceState,
   now: Date,
   ev: (e: Omit<NewEvent, 'at' | 'source'>) => void,
+  weakSignalPct: number,
 ) {
   const name = old.name ?? cur.linktapName;
   const base = { gatewayId: cur.gatewayId, deviceId: cur.id };
@@ -169,7 +171,7 @@ function deriveDeviceEvents(
 
   // Signal only means something while the device is reachable.
   if (cur.online && old.online && old.signalPct !== null && cur.signalPct !== null) {
-    const low = THRESHOLDS.signalLowPct;
+    const low = weakSignalPct;
     if (old.signalPct >= low && cur.signalPct < low) {
       ev({
         ...base,

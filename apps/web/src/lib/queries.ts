@@ -23,6 +23,7 @@ export const keys = {
     ['weather', gatewayId, from, to] as const,
   analytics: (target: string, from: string, to: string) => ['analytics', target, from, to] as const,
   events: ['events'] as const,
+  network: (days: number) => ['network', days] as const,
   linktapStatus: ['linktap-status'] as const,
 };
 
@@ -68,6 +69,32 @@ export const useEvents = () =>
 
 export const useLinkTapStatus = () =>
   useQuery({ queryKey: keys.linktapStatus, queryFn: api.linktapStatus, refetchInterval: 15_000 });
+
+/** Network health for the last `days` days. Derived from polls, so a minute is plenty fresh. */
+export const useNetwork = (days: number) =>
+  useQuery({
+    queryKey: keys.network(days),
+    queryFn: () => api.networkOverview(days),
+    refetchInterval: 60_000,
+    placeholderData: (prev) => prev,
+  });
+
+/** Runs the troubleshooting checklist for one timer. */
+export const useDiagnose = () =>
+  useMutation({
+    mutationFn: (deviceId: string) => api.diagnose(deviceId),
+    onError: (err) => toast.error('Diagnosis failed', errorMessage(err)),
+  });
+
+/** The weak-signal threshold. Changing it re-derives everything on the Network page. */
+export function useSetWeakSignal() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (pct: number) => api.patchNetworkSettings(pct),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: ['network'] }),
+    onError: (err) => toast.error('Could not save', errorMessage(err)),
+  });
+}
 
 // ---- device commands (optimistic) ---------------------------------------------------------------
 

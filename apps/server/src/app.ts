@@ -11,6 +11,7 @@ import type { Poller } from './poller';
 import { apiRoutes } from './api/routes';
 import { hookRoutes } from './api/hooks';
 import { analyticsRoutes } from './api/analytics';
+import { networkRoutes } from './api/network';
 import { scheduleRoutes } from './api/schedules';
 import type { OpenMeteoProvider } from './weather/open-meteo';
 import type { SchedulerEngine } from './schedule/engine';
@@ -62,6 +63,16 @@ export function createApp({
   api.route('/', apiRoutes({ db, linktap, poller, mock: config.LINKTAP_MOCK }));
   api.route('/', scheduleRoutes({ db, scheduler, executor, timeZone }));
   api.route('/', analyticsRoutes({ db, weather, timeZone }));
+  api.route(
+    '/',
+    networkRoutes({
+      db,
+      linktap,
+      poller,
+      mock: config.LINKTAP_MOCK,
+      webhookConfigured: !!config.WEBHOOK_SECRET,
+    }),
+  );
   api.all('*', (c) => c.json({ error: 'not found' }, 404));
   app.route('/api', api);
 

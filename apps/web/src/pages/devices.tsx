@@ -1,8 +1,9 @@
 import type { Device, GatewayWithDevices } from '@hoseidon/shared';
-import { Droplet, MapPin, Pencil, Router, TriangleAlert, X } from 'lucide-react';
+import { Droplet, MapPin, Pencil, Router, Stethoscope, TriangleAlert, X } from 'lucide-react';
 import { useState } from 'react';
 import { QuickRun } from '../components/devices/device-controls';
 import { DeviceSheet } from '../components/devices/device-sheet';
+import { DiagnoseSheet, type DiagnoseTarget } from '../components/network/diagnose-sheet';
 import { GatewaySheet } from '../components/devices/gateway-sheet';
 import { Page, PageHeader } from '../components/layout/app-shell';
 import { Badge, Dot } from '../components/ui/badge';
@@ -19,6 +20,7 @@ export function DevicesPage() {
   const { data, isPending, isError, error } = useGateways();
   const [editing, setEditing] = useState<Device | null>(null);
   const [gateway, setGateway] = useState<GatewayWithDevices | null>(null);
+  const [diagnosing, setDiagnosing] = useState<DiagnoseTarget | null>(null);
 
   const devices = data?.flatMap((g) => g.devices) ?? [];
   const attention = devices.filter((d) => d.alarms.length > 0 || !d.online).length;
@@ -71,12 +73,14 @@ export function DevicesPage() {
             key={g.id}
             gateway={g}
             onEditDevice={setEditing}
+            onDiagnose={(dev) => setDiagnosing({ id: dev.id, name: dev.name })}
             onEditGateway={() => setGateway(g)}
           />
         ))}
       </div>
 
       <DeviceSheet device={editing} onClose={() => setEditing(null)} />
+      <DiagnoseSheet target={diagnosing} onClose={() => setDiagnosing(null)} />
       <GatewaySheet
         gateway={gateway && (data?.find((g) => g.id === gateway.id) ?? gateway)}
         onClose={() => setGateway(null)}
@@ -88,10 +92,12 @@ export function DevicesPage() {
 function GatewayCard({
   gateway,
   onEditDevice,
+  onDiagnose,
   onEditGateway,
 }: {
   gateway: GatewayWithDevices;
   onEditDevice: (d: Device) => void;
+  onDiagnose: (d: Device) => void;
   onEditGateway: () => void;
 }) {
   const hasLocation = gateway.lat !== null && gateway.lon !== null;
@@ -126,7 +132,12 @@ function GatewayCard({
       </div>
       <ul className="divide-line divide-y">
         {gateway.devices.map((d) => (
-          <DeviceRow key={d.id} device={d} onEdit={() => onEditDevice(d)} />
+          <DeviceRow
+            key={d.id}
+            device={d}
+            onEdit={() => onEditDevice(d)}
+            onDiagnose={() => onDiagnose(d)}
+          />
         ))}
         {gateway.devices.length === 0 && (
           <li className="text-muted px-5 py-6 text-center text-sm">
@@ -138,7 +149,15 @@ function GatewayCard({
   );
 }
 
-function DeviceRow({ device, onEdit }: { device: Device; onEdit: () => void }) {
+function DeviceRow({
+  device,
+  onEdit,
+  onDiagnose,
+}: {
+  device: Device;
+  onEdit: () => void;
+  onDiagnose: () => void;
+}) {
   const dismiss = useDismissAlarm();
   const watering = device.watering !== null;
 
@@ -190,6 +209,15 @@ function DeviceRow({ device, onEdit }: { device: Device; onEdit: () => void }) {
           <Button
             size="icon-sm"
             variant="ghost"
+            onClick={onDiagnose}
+            aria-label={`Diagnose ${device.name}`}
+            title="Diagnose"
+          >
+            <Stethoscope className="size-3.5" />
+          </Button>
+          <Button
+            size="icon-sm"
+            variant="ghost"
             onClick={onEdit}
             aria-label={`Edit ${device.name}`}
           >
@@ -204,7 +232,17 @@ function DeviceRow({ device, onEdit }: { device: Device; onEdit: () => void }) {
           <BatteryIcon pct={device.batteryPct} />
           <SignalBars pct={device.signalPct} />
         </div>
-        <QuickRun device={device} className="ml-auto" />
+        <div className="ml-auto flex items-center gap-1">
+          <Button
+            size="icon-sm"
+            variant="ghost"
+            onClick={onDiagnose}
+            aria-label={`Diagnose ${device.name}`}
+          >
+            <Stethoscope className="size-3.5" />
+          </Button>
+          <QuickRun device={device} />
+        </div>
       </div>
 
       {device.alarms.length > 0 && (
