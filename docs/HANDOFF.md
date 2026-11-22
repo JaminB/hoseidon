@@ -493,3 +493,30 @@ Real 1-minute instant runs on a 4-outlet ValveLinker. Details in `docs/linktap-a
   window are not settled. `autoBack: true` (Hoseidon's default) was not exercised live.
 - The running `watering` shape inside `getAllDevices` is still unseen.
 - Manual "Run now" (`POST /devices/:id/run`) still does not verify the start.
+
+## Cloudflare phase A: research + design (docs only)
+
+**What exists**
+
+- `docs/cloudflare.md`: the plan to run all of Hoseidon on the Workers Free plan. Free-plan
+  facts checked against developers.cloudflare.com on 2026-11-22, the architecture (one Worker
+  for static assets + edge checks, routing `/api` and `/hooks` to one SQLite-backed `Brain`
+  Durable Object that runs the existing Hono app, a single alarm as the timer wheel, one cron
+  watchdog), dependency replacements, a daily budget table, CPU hot spots with measured numbers,
+  secrets, the Node → Workers migration plan and phases B–F.
+- Key findings: `drizzle-orm@0.45.4` already ships `durable-sqlite` with a **sync** session and
+  `transactionSync` transactions, so the query code can be shared with better-sqlite3 and the
+  Node/Docker target stays. One always-on DO is 10,800 GB-s/day, under the 13,000 free, so
+  duration can't run out with a single object. The binding limits are 100 k rows written/day
+  (index entries and `setAlarm` count) and the 10 ms CPU budget (the DO limits page says 30 s,
+  its FAQ says Worker limits apply; we design for 10 ms).
+- Measured on the dev box (Node 24, mock LinkTap): device poll ~3 ms, engine tick ~1 ms, UI
+  reads 0.2–1.4 ms, **network overview 17–41 ms (over budget, must be fixed before go-live)**,
+  PBKDF2-SHA256 25 k iterations ~3.6 ms, scrypt N=2^15 64 ms, a push message ~0.5 ms.
+
+**Known gaps**
+
+- DO CPU limit on Free (10 ms vs 30 s), per-object storage on Free (1 GB vs 10 GB), whether cron
+  runs count as requests, and FK enforcement on DO SQLite are unresolved in the docs; phase C
+  measures them.
+- `@simplewebauthn/server` and the planned WebCrypto push sender are untested in workerd.
