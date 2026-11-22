@@ -25,7 +25,10 @@ keeps your lawn alive without a single "Oops, something went wrong" toast.
 - [x] A mock LinkTap server so you can develop without flooding your yard
 - [x] LinkTap client with a rate-limit queue, a poller, a webhook receiver and a REST API
 - [ ] Device and network monitoring (gateways, timers, battery, signal, alarms)
-- [ ] A real scheduler (RRULE-based, run one zone at a time, skips for rain, freeze and wind)
+- [x] A real scheduler engine: RRULE-based and DST-safe, one zone at a time per gateway,
+      cycle-and-soak, skip rules, verified starts, and quick add ("every other day 6am front lawn 15m")
+- [ ] Weather-driven skips (rain, freeze, wind) and ET₀ scaling (the rules exist; the forecast
+      arrives with the weather phase)
 - [ ] Google Calendar sync
 - [ ] Per-sprinkler analytics next to weather (rain, ET0, soil moisture)
 - [ ] Installable PWA with push notifications for alarms and offline devices
@@ -77,6 +80,14 @@ Calendar API, and creating an OAuth client with the `calendar.app.created` scope
 
 _Coming soon._ This section will cover creating a tunnel, setting `CLOUDFLARE_TUNNEL_TOKEN`, and
 starting the optional profile with `docker compose --profile tunnel up -d`.
+
+### Schedules
+
+LinkTap's cloud API can't store watering plans, so Hoseidon keeps its own schedules and starts
+timed instant runs itself. If a timer still has a plan from the LinkTap app, the schedule shows a
+warning, because otherwise that zone gets watered twice. Switch those timers to manual in the
+LinkTap app. See [docs/scheduler.md](docs/scheduler.md) for how runs are planned, skipped and
+verified.
 
 ### LinkTap webhooks
 
