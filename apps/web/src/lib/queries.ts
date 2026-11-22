@@ -4,6 +4,7 @@ import type {
   Device,
   DismissableAlarm,
   GatewayWithDevices,
+  GcalStatus,
   Schedule,
   ScheduleInput,
   SchedulePatch,
@@ -25,6 +26,7 @@ export const keys = {
   events: ['events'] as const,
   network: (days: number) => ['network', days] as const,
   linktapStatus: ['linktap-status'] as const,
+  gcal: ['gcal'] as const,
 };
 
 const errorMessage = (err: unknown) => (err instanceof Error ? err.message : String(err));
@@ -78,6 +80,30 @@ export const useNetwork = (days: number) =>
     refetchInterval: 60_000,
     placeholderData: (prev) => prev,
   });
+
+/** Google Calendar connection + sync state. Polls faster while a sync is queued or running. */
+export const useGcalStatus = () =>
+  useQuery({
+    queryKey: keys.gcal,
+    queryFn: api.gcalStatus,
+    refetchInterval: (q) =>
+      ['pending', 'running'].includes(q.state.data?.sync.state ?? '') ? 3_000 : 60_000,
+  });
+
+function useGcalMutation<T>(fn: (arg: T) => Promise<GcalStatus>, failure: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: fn,
+    onSuccess: (status) => qc.setQueryData(keys.gcal, status),
+    onError: (err) => toast.error(failure, errorMessage(err)),
+  });
+}
+
+export const useGcalDisconnect = () =>
+  useGcalMutation(() => api.gcalDisconnect(), 'Could not disconnect');
+export const useGcalResync = () => useGcalMutation(() => api.gcalResync(), 'Resync failed');
+export const useGcalLogRuns = () =>
+  useGcalMutation((on: boolean) => api.gcalSettings(on), 'Could not save');
 
 /** Runs the troubleshooting checklist for one timer. */
 export const useDiagnose = () =>

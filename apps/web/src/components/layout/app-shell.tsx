@@ -17,6 +17,7 @@ import { useHealth } from '../../lib/queries';
 import { useTheme, type ThemePref } from '../../lib/theme';
 import { Dot } from '../ui/badge';
 import { LogoMark } from '../logo';
+import { GcalReconnectBanner } from '../gcal-card';
 
 export const NAV: { to: string; label: string; icon: LucideIcon }[] = [
   { to: '/', label: 'Home', icon: House },
@@ -140,6 +141,7 @@ export function AppShell() {
     <div className="flex min-h-dvh">
       <Sidebar />
       <main className="min-w-0 flex-1 pb-[calc(76px+env(safe-area-inset-bottom))] md:pb-0">
+        <GcalReconnectBanner />
         <Suspense>
           <Outlet />
         </Suspense>
