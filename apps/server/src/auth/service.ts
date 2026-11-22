@@ -149,6 +149,9 @@ export class AuthService {
   /** ADMIN_EMAIL addresses are always present, enabled admins. */
   private ensureAdmins(): void {
     for (const email of adminEmails(this.o.config)) {
+      // Read first: a Durable Object start shouldn't spend a row write when nothing changed.
+      const row = this.user(email);
+      if (row && row.role === 'admin' && !row.disabled) continue;
       this.o.db
         .insert(users)
         .values({ email, role: 'admin', disabled: false })
