@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react';
+import { useMemo, type ReactNode } from 'react';
 import {
   Bar,
   CartesianGrid,
@@ -11,7 +11,8 @@ import {
   YAxis,
 } from 'recharts';
 import { cn } from '../../lib/cn';
-import { parseDate, type ChartRow } from '../../lib/analytics';
+import { parseDate, toDisplayUnits, type ChartRow } from '../../lib/analytics';
+import { unitLabels, useUnits } from '../../lib/units';
 
 /** Chart colors come from the design tokens, so they follow light/dark with the rest of the app. */
 export const COLOR = {
@@ -93,7 +94,10 @@ const Frame = ({ children, height = 240 }: { children: ReactNode; height?: numbe
 );
 
 /** Water used (bars, left) against rainfall (area) and ET0 (line) on the right axis. */
-export function WaterWeatherChart({ rows }: { rows: ChartRow[] }) {
+export function WaterWeatherChart({ rows: metricRows }: { rows: ChartRow[] }) {
+  const [units] = useUnits();
+  const u = unitLabels(units);
+  const rows = useMemo(() => toDisplayUnits(metricRows, units), [metricRows, units]);
   const hasWeather = rows.some((r) => r.rainMm !== null || r.et0Mm !== null);
   return (
     <Frame>
@@ -114,7 +118,7 @@ export function WaterWeatherChart({ rows }: { rows: ChartRow[] }) {
             tickLine={false}
             axisLine={false}
             width={44}
-            unit=" L"
+            unit={` ${u.volume}`}
             allowDecimals={false}
           />
           {hasWeather && (
@@ -125,7 +129,7 @@ export function WaterWeatherChart({ rows }: { rows: ChartRow[] }) {
               tickLine={false}
               axisLine={false}
               width={44}
-              unit=" mm"
+              unit={` ${u.depth}`}
               allowDecimals={false}
             />
           )}
@@ -138,12 +142,12 @@ export function WaterWeatherChart({ rows }: { rows: ChartRow[] }) {
                 describe={(r) => ({
                   title: rowTitle(r),
                   items: [
-                    { color: COLOR.water, name: 'Water used', value: `${r.liters} L` },
+                    { color: COLOR.water, name: 'Water used', value: `${r.liters} ${u.volume}` },
                     ...(r.rainMm !== null
-                      ? [{ color: COLOR.rain, name: 'Rain', value: `${r.rainMm} mm` }]
+                      ? [{ color: COLOR.rain, name: 'Rain', value: `${r.rainMm} ${u.depth}` }]
                       : []),
                     ...(r.et0Mm !== null
-                      ? [{ color: COLOR.et0, name: 'ET₀', value: `${r.et0Mm} mm` }]
+                      ? [{ color: COLOR.et0, name: 'ET₀', value: `${r.et0Mm} ${u.depth}` }]
                       : []),
                   ],
                 })}
@@ -264,13 +268,17 @@ export const DurationChart = ({ rows }: { rows: ChartRow[] }) => (
   />
 );
 
-export const FlowChart = ({ rows }: { rows: ChartRow[] }) => (
-  <TrendChart
-    rows={rows}
-    dataKey="flowLMin"
-    unit="L/min"
-    color={COLOR.rain}
-    name="Flow"
-    describe={(r) => (r.flowLMin === null ? 'No data' : `${r.flowLMin} L/min`)}
-  />
-);
+export function FlowChart({ rows }: { rows: ChartRow[] }) {
+  const [units] = useUnits();
+  const flow = unitLabels(units).flow;
+  return (
+    <TrendChart
+      rows={useMemo(() => toDisplayUnits(rows, units), [rows, units])}
+      dataKey="flowLMin"
+      unit={flow}
+      color={COLOR.rain}
+      name="Flow"
+      describe={(r) => (r.flowLMin === null ? 'No data' : `${r.flowLMin} ${flow}`)}
+    />
+  );
+}

@@ -17,7 +17,9 @@ import { EmptyState, ErrorBanner, inputClass, Skeleton, Stat } from '../componen
 import { Segmented } from '../components/ui/tabs';
 import {
   buildChartRows,
-  formatLiters,
+  formatDepth,
+  formatFlow,
+  formatVolume,
   RANGES,
   rangeDates,
   SKIP_LABEL,
@@ -25,6 +27,7 @@ import {
 } from '../lib/analytics';
 import { cn } from '../lib/cn';
 import { formatDuration } from '../lib/format';
+import { useUnits } from '../lib/units';
 import { useAnalytics, useGateways, useWeather } from '../lib/queries';
 
 const SKIP_COLOR: Record<SkipReasonKind, string> = {
@@ -37,6 +40,7 @@ const SKIP_COLOR: Record<SkipReasonKind, string> = {
 };
 
 export function AnalyticsPage() {
+  const [units] = useUnits();
   const [target, setTarget] = useState('all');
   const [range, setRange] = useState<RangeKey>('30d');
   const { from, to } = useMemo(() => rangeDates(range), [range]);
@@ -108,7 +112,7 @@ export function AnalyticsPage() {
           icon={Droplet}
           tone="accent"
           label="Water used"
-          value={a && formatLiters(a.totals.volumeMl)}
+          value={a && formatVolume(a.totals.volumeMl)}
           hint={a && `${a.totals.runs} runs`}
         />
         <Tile
@@ -126,9 +130,7 @@ export function AnalyticsPage() {
           pending={!a}
           icon={Gauge}
           label="Avg flow"
-          value={
-            a && (a.hasFlow ? `${((a.totals.avgFlowMlMin ?? 0) / 1000).toFixed(1)} L/min` : '—')
-          }
+          value={a && (a.hasFlow ? formatFlow(a.totals.avgFlowMlMin ?? 0) : '—')}
           hint={a && (a.hasFlow ? 'Across runs with a flow meter' : 'Needs a G2 flow meter')}
         />
         <Tile
@@ -161,7 +163,7 @@ export function AnalyticsPage() {
               title="Water used vs. rain and ET₀"
               description={
                 located
-                  ? `${weatherGateway?.name}${rainTotal ? ` · ${Math.round(rainTotal)} mm of rain in this range` : ''}`
+                  ? `${weatherGateway?.name}${rainTotal ? ` · ${formatDepth(rainTotal)} of rain in this range` : ''}`
                   : 'Add a gateway location to overlay rainfall and evapotranspiration.'
               }
               actions={
@@ -204,7 +206,7 @@ export function AnalyticsPage() {
             <Card>
               <CardHeader
                 title="Flow rate"
-                description="Liters per minute, from the timer's flow meter"
+                description={`${units === 'imperial' ? 'Gallons' : 'Liters'} per minute, from the timer's flow meter`}
               />
               <div className="px-3 pb-4 md:px-5">
                 {!a ? <Skeleton className="h-48" /> : <FlowChart rows={rows} />}
@@ -215,7 +217,11 @@ export function AnalyticsPage() {
           <Card>
             <CardHeader
               title="Calendar"
-              description={a?.hasFlow ? 'Liters per day' : 'Minutes watered per day'}
+              description={
+                a?.hasFlow
+                  ? `${units === 'imperial' ? 'Gallons' : 'Liters'} per day`
+                  : 'Minutes watered per day'
+              }
             />
             <div className="px-5 pb-5">
               {!a ? (
@@ -261,7 +267,7 @@ export function AnalyticsPage() {
 function savedValue(a: Analytics): string {
   if (a.saved.seconds <= 0) return '—';
   return a.saved.volumeMl !== null
-    ? formatLiters(a.saved.volumeMl)
+    ? formatVolume(a.saved.volumeMl)
     : formatDuration(a.saved.seconds);
 }
 

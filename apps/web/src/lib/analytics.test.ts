@@ -1,13 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { AnalyticsDay, WeatherDay } from '@hoseidon/shared';
-import {
-  buildChartRows,
-  buildHeatmap,
-  formatLiters,
-  formatTemp,
-  localDate,
-  rangeDates,
-} from './analytics';
+import { buildChartRows, buildHeatmap, localDate, rangeDates, toDisplayUnits } from './analytics';
 
 const day = (date: string, over: Partial<AnalyticsDay> = {}): AnalyticsDay => ({
   date,
@@ -42,17 +35,21 @@ describe('rangeDates', () => {
   });
 });
 
-describe('formatters', () => {
-  it('scales liters', () => {
-    expect(formatLiters(4_200)).toBe('4.2 L');
-    expect(formatLiters(48_000)).toBe('48 L');
-    expect(formatLiters(1_250_000)).toBe('1,250 L');
-    expect(formatLiters(25_000_000)).toBe('25.0 kL');
+describe('toDisplayUnits', () => {
+  const metric = buildChartRows(
+    [day('2026-06-01', { volumeMl: 3785.411784, avgFlowMlMin: 3785.411784, durationSec: 60 })],
+    [wx('2026-06-01', { rainMm: 25.4, et0Mm: 2.54 })],
+  );
+  it('leaves metric rows alone', () => {
+    expect(toDisplayUnits(metric, 'metric')).toBe(metric);
   });
-  it('converts temperature on demand', () => {
-    expect(formatTemp(20, true)).toBe('68°');
-    expect(formatTemp(20, false)).toBe('20°');
-    expect(formatTemp(null, false)).toBe('—');
+  it('converts volume, depth and flow to imperial', () => {
+    expect(toDisplayUnits(metric, 'imperial')[0]).toMatchObject({
+      liters: 1,
+      rainMm: 1,
+      et0Mm: 0.1,
+      flowLMin: 1,
+    });
   });
 });
 

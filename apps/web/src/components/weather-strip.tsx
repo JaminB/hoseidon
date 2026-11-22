@@ -4,7 +4,7 @@ import { CloudRain, CloudSun, MapPin, Sun, Wind } from 'lucide-react';
 import { useMemo } from 'react';
 import { Link } from 'react-router';
 import { addDays, startOfDay } from '../lib/calendar';
-import { formatTemp, localDate, parseDate } from '../lib/analytics';
+import { formatDepth, formatTemp, localDate, parseDate } from '../lib/analytics';
 import { cn } from '../lib/cn';
 import { useGateways, useWeather } from '../lib/queries';
 import { Card } from './ui/card';
@@ -80,7 +80,7 @@ export function WeatherStrip({ now }: { now: number }) {
                     )}
                   >
                     {(d.rainMm ?? 0) >= 0.1 ? (
-                      `${Math.round((d.rainMm ?? 0) * 10) / 10} mm`
+                      formatDepth(d.rainMm ?? 0)
                     ) : (
                       <>
                         <Wind className="size-3" />

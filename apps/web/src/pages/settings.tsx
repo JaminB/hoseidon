@@ -1,30 +1,26 @@
 import { Monitor, Moon, Sun } from 'lucide-react';
-import { useEffect, useRef, type ReactNode } from 'react';
+import { useEffect, useRef } from 'react';
 import { useSearchParams } from 'react-router';
 import { GcalCard } from '../components/gcal-card';
+import { ThresholdCard } from '../components/network/threshold-card';
+import { LinktapCard } from '../components/settings/linktap-card';
+import { NotificationsCard } from '../components/settings/notifications-card';
+import { PreferencesCard } from '../components/settings/preferences-card';
+import { Row } from '../components/settings/row';
+import { SecurityCard } from '../components/settings/security-card';
+import { Skeleton } from '../components/ui/misc';
 import { toast } from '../components/ui/toast';
 import { connectErrorMessage } from '../lib/gcal';
 import { Page, PageHeader } from '../components/layout/app-shell';
-import { Badge } from '../components/ui/badge';
 import { Card, CardHeader } from '../components/ui/card';
 import { Segmented } from '../components/ui/tabs';
-import { formatRelative } from '../lib/format';
-import { useHealth, useLinkTapStatus } from '../lib/queries';
-import { useNow } from '../lib/use-now';
+import { useHealth, useNetworkSettings } from '../lib/queries';
 import { useTheme } from '../lib/theme';
 
 export function SettingsPage() {
   const [theme, setTheme] = useTheme();
   const health = useHealth();
-  const status = useLinkTapStatus();
-  const now = useNow(1000);
   useGcalRedirectToast();
-
-  const wait = (iso?: string) => {
-    if (!iso) return '—';
-    const s = Math.ceil((Date.parse(iso) - now) / 1000);
-    return s > 0 ? `in ${s < 90 ? `${s} s` : `${Math.ceil(s / 60)} min`}` : 'Ready';
-  };
 
   return (
     <Page>
@@ -67,31 +63,17 @@ export function SettingsPage() {
           </div>
         </Card>
 
-        <Card>
-          <CardHeader
-            title="LinkTap"
-            description="Hoseidon talks to the LinkTap cloud and respects its rate limits."
-            actions={
-              health.data && (
-                <Badge tone={health.data.mock ? 'warn' : 'ok'}>
-                  {health.data.mock ? 'Mock mode' : 'Live'}
-                </Badge>
-              )
-            }
-          />
-          <dl className="divide-line border-line divide-y border-t">
-            <Row label="Next device refresh">{wait(status.data?.nextAvailableAt.devices)}</Row>
-            <Row label="Next command slot">{wait(status.data?.nextAvailableAt.command)}</Row>
-            <Row label="Next history fetch">{wait(status.data?.nextAvailableAt.history)}</Row>
-            <Row label="Last device poll">
-              {status.data?.poller?.last.devices?.at
-                ? formatRelative(status.data.poller.last.devices.at, now)
-                : '—'}
-            </Row>
-          </dl>
-        </Card>
+        <PreferencesCard />
+
+        <NotificationsCard />
+
+        <WeakSignal />
+
+        <LinktapCard />
 
         <GcalCard />
+
+        <SecurityCard />
 
         <Card>
           <CardHeader title="About" />
@@ -133,11 +115,7 @@ function useGcalRedirectToast() {
   }, [result, reason, setParams]);
 }
 
-function Row({ label, children }: { label: string; children: ReactNode }) {
-  return (
-    <div className="flex items-center justify-between gap-4 px-5 py-3 text-sm">
-      <dt className="text-muted">{label}</dt>
-      <dd className="tnum text-right">{children}</dd>
-    </div>
-  );
+function WeakSignal() {
+  const { data } = useNetworkSettings();
+  return data ? <ThresholdCard pct={data.weakSignalPct} /> : <Skeleton className="h-28" />;
 }

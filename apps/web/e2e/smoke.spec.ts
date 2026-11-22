@@ -20,6 +20,8 @@ const VIEWPORTS = [
 ] as const;
 
 const TZ = 'America/New_York';
+// API writes must carry this header (the browser app adds it itself).
+const CSRF = { 'x-hoseidon-csrf': '1' };
 const SCHEMES = ['light', 'dark'] as const;
 
 // Mock LinkTap ids (apps/server/src/linktap/mock.ts).
@@ -52,6 +54,7 @@ async function seed(request: APIRequestContext) {
   // One gateway gets a location, so weather and analytics have something to show.
   const located = await request.patch('/api/gateways/A1B2C3D4E5F60001', {
     data: { lat: 40.71, lon: -74.01, timezone: TZ },
+    headers: CSRF,
   });
   expect(located.ok(), await located.text()).toBe(true);
   const existing = (await (await request.get('/api/schedules')).json()) as unknown[];
@@ -110,7 +113,7 @@ async function seed(request: APIRequestContext) {
     },
   ];
   for (const s of schedules) {
-    const res = await request.post('/api/schedules', { data: s });
+    const res = await request.post('/api/schedules', { data: s, headers: CSRF });
     expect(res.ok(), await res.text()).toBe(true);
   }
 }

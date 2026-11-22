@@ -289,3 +289,35 @@ export const gcalEvents = sqliteTable('gcal_events', {
 
 export type GcalAccountRow = typeof gcalAccount.$inferSelect;
 export type GcalEventRow = typeof gcalEvents.$inferSelect;
+
+/** Browser sessions. Only a hash of the cookie token is stored, so a DB leak can't be replayed. */
+export const sessions = sqliteTable('sessions', {
+  /** sha256 hex of the cookie token. */
+  id: text('id').primaryKey(),
+  createdAt: createdAt(),
+  expiresAt: ts('expires_at').notNull(),
+});
+
+/** WebAuthn credentials for the single admin. */
+export const passkeys = sqliteTable('passkeys', {
+  /** Base64url credential id. */
+  id: text('id').primaryKey(),
+  name: text('name').notNull(),
+  /** Base64url COSE public key. */
+  publicKey: text('public_key').notNull(),
+  counter: integer('counter').notNull().default(0),
+  transports: text('transports', { mode: 'json' }).$type<string[]>(),
+  createdAt: createdAt(),
+  lastUsedAt: ts('last_used_at'),
+});
+
+/** Web Push subscriptions, one per browser or installed PWA. */
+export const pushSubscriptions = sqliteTable('push_subscriptions', {
+  endpoint: text('endpoint').primaryKey(),
+  p256dh: text('p256dh').notNull(),
+  auth: text('auth').notNull(),
+  createdAt: createdAt(),
+});
+
+export type PasskeyRow = typeof passkeys.$inferSelect;
+export type PushSubscriptionRow = typeof pushSubscriptions.$inferSelect;

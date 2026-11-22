@@ -32,6 +32,7 @@ import {
   useStopDevice,
 } from '../lib/queries';
 import { useNow } from '../lib/use-now';
+import { formatVolume } from '../lib/units';
 
 const dateFmt = new Intl.DateTimeFormat(undefined, {
   weekday: 'long',
@@ -234,7 +235,7 @@ function RunningCard({ device }: { device: Device }) {
         <div className="truncate text-[15px] font-semibold tracking-tight">{device.name}</div>
         <div className="text-muted mt-0.5 text-xs">
           {formatDuration(total)} run
-          {volume ? ` · ${(volume / 1000).toFixed(1)} L so far` : ''}
+          {volume ? ` · ${formatVolume(volume)} so far` : ''}
         </div>
         <Button
           size="sm"

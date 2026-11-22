@@ -5,6 +5,7 @@ import type {
   DismissableAlarm,
   GatewayWithDevices,
   GcalStatus,
+  PushPrefs,
   Schedule,
   ScheduleInput,
   SchedulePatch,
@@ -395,3 +396,41 @@ export const useAnalytics = (target: string, from: string, to: string) =>
     staleTime: 60_000,
     placeholderData: (prev) => prev,
   });
+
+// ---- auth, settings, notifications ---------------------------------------------------------------
+
+export const SESSION_KEY = ['auth', 'session'] as const;
+
+export const useSession = () =>
+  useQuery({ queryKey: SESSION_KEY, queryFn: api.session, staleTime: 60_000, retry: 1 });
+
+export const usePasskeys = () =>
+  useQuery({ queryKey: ['auth', 'passkeys'], queryFn: api.passkeys });
+
+export const useAppSettings = () => useQuery({ queryKey: ['settings'], queryFn: api.appSettings });
+
+export function useSetTimeZone() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (timeZone: string) => api.patchAppSettings({ timeZone }),
+    onSuccess: (s) => qc.setQueryData(['settings'], s),
+    onError: (err) => toast.error('Could not save', errorMessage(err)),
+  });
+}
+
+export const useNetworkSettings = () =>
+  useQuery({ queryKey: ['network', 'settings'], queryFn: api.networkSettings });
+
+export const usePushStatus = () => useQuery({ queryKey: ['push'], queryFn: api.push });
+
+export function usePushPrefs() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (prefs: Partial<PushPrefs>) => api.pushPrefs(prefs),
+    scope: { id: 'push-prefs' },
+    onSuccess: (s) => qc.setQueryData(['push'], s),
+    onError: (err) => toast.error('Could not save', errorMessage(err)),
+  });
+}
+
+export const useWebhookInfo = () => useQuery({ queryKey: ['webhook'], queryFn: api.webhook });

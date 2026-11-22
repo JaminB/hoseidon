@@ -6,6 +6,8 @@ import { LinkTapMock, type MockOptions } from './linktap/mock';
 import { Poller } from './poller';
 import { SchedulerEngine, type EngineOptions } from './schedule/engine';
 import { CloudExecutor } from './schedule/executor';
+import { AuthService } from './auth/service';
+import { PushService, type PushSender } from './push/service';
 import { GcalService, type GcalOptions } from './gcal/service';
 import { mockOpenMeteoFetch } from './weather/mock';
 import { OpenMeteoProvider } from './weather/open-meteo';
@@ -29,6 +31,9 @@ export function harness(
     engine?: Partial<EngineOptions>;
     weatherFetch?: typeof fetch;
     gcal?: Partial<GcalOptions>;
+    /** Turn real session checks on (they are off by default so route tests need no login). */
+    auth?: boolean;
+    pushSend?: PushSender;
   } = {},
 ) {
   const { db, sqlite } = openDb(':memory:');
@@ -54,6 +59,8 @@ export function harness(
   const weather = new OpenMeteoProvider({ db, fetch: opts.weatherFetch ?? mockOpenMeteoFetch });
   const scheduler = new SchedulerEngine({ db, executor, ...opts.engine });
   const gcal = new GcalService({ db, config, timeZone: 'UTC', executor, ...opts.gcal });
+  const auth = new AuthService({ db, config });
+  const push = new PushService({ db, config, send: opts.pushSend ?? (() => Promise.resolve()) });
   const app = createApp({
     config,
     db,
@@ -64,6 +71,23 @@ export function harness(
     weather,
     timeZone: 'UTC',
     gcal,
+    auth,
+    push,
+    requireAuth: opts.auth ?? false,
   });
-  return { db, sqlite, mock, client, poller, executor, scheduler, weather, gcal, app, config };
+  return {
+    db,
+    sqlite,
+    mock,
+    client,
+    poller,
+    executor,
+    scheduler,
+    weather,
+    gcal,
+    app,
+    config,
+    auth,
+    push,
+  };
 }
