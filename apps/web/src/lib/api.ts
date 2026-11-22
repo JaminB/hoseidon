@@ -6,6 +6,9 @@ import {
   linktapTestSchema,
   passkeySchema,
   pushStatusSchema,
+  userSchema,
+  type UserInput,
+  type UserPatch,
   webhookInfoSchema,
   type AppSettings,
   type PushPrefs,
@@ -133,6 +136,19 @@ export const api = {
       method: 'POST',
       body: { challengeId, response },
       quiet401: true,
+    }),
+
+  users: () => request('/admin/users', z.array(userSchema)),
+  addUser: (input: UserInput) =>
+    request('/admin/users', userSchema, { method: 'POST', body: input }),
+  patchUser: (email: string, patch: UserPatch) =>
+    request(`/admin/users/${encodeURIComponent(email)}`, userSchema, {
+      method: 'PATCH',
+      body: patch,
+    }),
+  removeUser: (email: string) =>
+    request(`/admin/users/${encodeURIComponent(email)}`, z.array(userSchema), {
+      method: 'DELETE',
     }),
 
   appSettings: () => request('/settings', appSettingsSchema),

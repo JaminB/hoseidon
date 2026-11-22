@@ -410,6 +410,10 @@ export const useSession = () =>
 export const usePasskeys = () =>
   useQuery({ queryKey: ['auth', 'passkeys'], queryFn: api.passkeys });
 
+export const USERS_KEY = ['admin', 'users'] as const;
+export const useUsers = (enabled = true) =>
+  useQuery({ queryKey: USERS_KEY, queryFn: api.users, enabled });
+
 export const useAppSettings = () => useQuery({ queryKey: ['settings'], queryFn: api.appSettings });
 
 export function useSetTimeZone() {
