@@ -76,6 +76,8 @@ export class GcalService {
   private dirty = false;
   private failures = 0;
   private inBackoff = false;
+  /** A callback is swapping the connection: no sync may run until it's done. */
+  private connecting = false;
 
   constructor(private readonly opts: GcalOptions) {
     this.db = opts.db;
@@ -232,24 +234,33 @@ export class GcalService {
     tokens.set(token.access_token, token.expires_in);
     const api = new CalendarApi({ fetch: this.fetch, token: (force) => tokens.get(force) });
 
-    let calendarId: string;
+    // Swapping the connection (maybe the calendar) under an in-flight sync would save its event
+    // ids against the wrong calendar. Hold syncs off and let the current one finish first.
+    this.connecting = true;
     try {
-      calendarId = await this.ensureCalendar(api, this.account()?.calendarId ?? null);
-    } catch (err) {
-      this.log(`gcal: calendar setup failed: ${(err as Error).message}`);
-      return { ok: false, reason: 'calendar' };
+      this.clearTimer();
+      await this.running?.catch(() => {});
+      let calendarId: string;
+      try {
+        calendarId = await this.ensureCalendar(api, this.account()?.calendarId ?? null);
+      } catch (err) {
+        this.log(`gcal: calendar setup failed: ${(err as Error).message}`);
+        return { ok: false, reason: 'calendar' };
+      }
+      this.saveAccount({
+        refreshTokenEnc: this.box.encrypt(refreshToken),
+        scope: token.scope,
+        calendarId,
+        connectedAt: this.now(),
+        needsReconnect: false,
+        lastError: null,
+      });
+      this.tokens = tokens;
+      this.failures = 0;
+      this.inBackoff = false;
+    } finally {
+      this.connecting = false;
     }
-    this.saveAccount({
-      refreshTokenEnc: this.box.encrypt(refreshToken),
-      scope: token.scope,
-      calendarId,
-      connectedAt: this.now(),
-      needsReconnect: false,
-      lastError: null,
-    });
-    this.tokens = tokens;
-    this.failures = 0;
-    this.inBackoff = false;
     this.request(0);
     return { ok: true };
   }
@@ -261,7 +272,11 @@ export class GcalService {
         await api.getCalendar(existing);
         return existing;
       } catch (err) {
-        if (!(err instanceof GoogleApiError && (err.gone || err.status === 403))) throw err;
+        // Replace only when the calendar is gone or we lost access to it. A 403 can also be a rate
+        // limit, which must back off rather than orphan every event in the old calendar.
+        const lost =
+          err instanceof GoogleApiError && (err.gone || (err.status === 403 && !err.rateLimited));
+        if (!lost) throw err;
       }
     }
     const created = await api.createCalendar({
@@ -337,7 +352,7 @@ export class GcalService {
 
   /** Something changed: sync soon. Edits in quick succession share one sync. */
   request(delayMs = this.opts.debounceMs ?? 3000) {
-    if (!this.connected) return;
+    if (!this.connected || this.connecting) return;
     if (this.running) {
       this.dirty = true;
       return;
@@ -375,6 +390,8 @@ export class GcalService {
 
   /** Run a sync now (serialized). Resolves when it and any follow-up it triggered are done. */
   async syncNow(): Promise<void> {
+    // The callback requests a sync once it's done.
+    if (this.connecting) return;
     if (this.running) {
       this.dirty = true;
       return this.running;
@@ -439,7 +456,9 @@ export class GcalService {
           try {
             return await source.get(force);
           } catch (err) {
-            if (err instanceof GoogleAuthError && (err.invalidGrant || err.status === 401)) {
+            // Only invalid_grant means the grant is dead. invalid_client and friends are a config
+            // problem: back off and keep the token, so fixing the client resumes sync.
+            if (err instanceof GoogleAuthError && err.invalidGrant) {
               throw new ReconnectRequired('Google revoked or expired the connection');
             }
             throw err;
@@ -447,7 +466,8 @@ export class GcalService {
         },
       });
       try {
-        const errors = await applyOps(this.db, api, calendarId, ops, desired, this.now);
+        const { errors, again } = await applyOps(this.db, api, calendarId, ops, desired, this.now);
+        if (again) this.dirty = true;
         this.saveAccount({
           lastSyncAt: this.now(),
           lastError: errors.length

@@ -408,6 +408,130 @@ describe('gcal sync', () => {
     expect(t.google.events()).toHaveLength(2);
   });
 
+  it('does not duplicate an event when the insert response is lost', async () => {
+    const t = await setup();
+    await t.connect();
+    await t.createSchedule();
+    t.google.loseNextResponse((m, p) => m === 'POST' && p.endsWith('/events'));
+    await t.gcal.syncNow();
+    expect((await t.status()).sync.state).toBe('backoff');
+    // Google made it; we only know its id.
+    expect(t.google.events()).toHaveLength(1);
+
+    await t.gcal.syncNow();
+    expect(t.google.events()).toHaveLength(1);
+    const row = t.db.select().from(gcalEvents).get()!;
+    expect(row.eventId).toBe(t.google.events()[0]!.id);
+    expect(row.hash).not.toBe('');
+    expect((await t.status()).lastError).toBeNull();
+  });
+
+  it('recreates a series deleted in Google when a skip needs it', async () => {
+    const t = await setup();
+    const s = await t.createSchedule();
+    await t.connect();
+    await t.gcal.syncNow();
+    const old = t.google.events()[0]!;
+    // Deleted in Google; our hash is unchanged, so only the skip notices.
+    old.status = 'cancelled';
+    const occurrenceAt = new Date(Date.now() - 2 * HOUR);
+    occurrenceAt.setUTCSeconds(0, 0);
+    t.db
+      .insert(plannedRuns)
+      .values({
+        scheduleId: s.id,
+        gatewayId: MOCK_IDS.backyard,
+        deviceId: MOCK_IDS.frontLawn,
+        seq: 0,
+        occurrenceAt,
+        plannedAt: occurrenceAt,
+        baseSeconds: 900,
+        seconds: 900,
+        cycle: 1,
+        status: 'skipped',
+        skipReason: 'Rain forecast 8 mm',
+        updatedAt: new Date(),
+      })
+      .run();
+    await t.gcal.syncNow();
+
+    const parent = t.google.events().find((e) => e.recurrence)!;
+    expect(parent.id).not.toBe(old.id);
+    expect(t.google.events().find((e) => e.recurringEventId === parent.id)).toMatchObject({
+      summary: '⏭ Lawn (skipped)',
+    });
+    const s2 = await t.status();
+    expect(s2).toMatchObject({ lastError: null, sync: { failures: 0 } });
+    expect(t.db.select().from(schedules).where(eq(schedules.id, s.id)).get()!.gcalEventId).toBe(
+      parent.id,
+    );
+  });
+
+  it('keeps the calendar when Google rate-limits the reconnect check', async () => {
+    const t = await setup();
+    await t.createSchedule();
+    await t.connect();
+    await t.gcal.syncNow();
+    const cal = [...t.google.calendars.values()][0]!;
+    t.google.failNext(
+      (m, p) => m === 'GET' && p === `/calendars/${cal.id}`,
+      403,
+      1,
+      'rateLimitExceeded',
+    );
+    expect(await t.connect()).toMatch(/reason=calendar/);
+    expect(t.google.calendars.size).toBe(1);
+    expect(t.db.select().from(gcalEvents).all()).toHaveLength(1);
+
+    // A plain 403 (no access to the old calendar) does make a new one.
+    t.google.failNext((m, p) => m === 'GET' && p === `/calendars/${cal.id}`, 403, 1, 'forbidden');
+    expect(await t.connect()).toMatch(/connected/);
+    expect(t.google.calendars.size).toBe(2);
+  });
+
+  it('backs off on invalid_client instead of asking to reconnect', async () => {
+    const t = await setup();
+    await t.connect();
+    t.advance(2 * HOUR);
+    t.google.rejectClient = true;
+    await t.createSchedule();
+    await t.gcal.syncNow();
+    let s = await t.status();
+    expect(s).toMatchObject({ needsReconnect: false, sync: { state: 'backoff' } });
+    expect(s.lastError).toMatch(/OAuth client/);
+
+    t.google.rejectClient = false;
+    await t.gcal.syncNow();
+    s = await t.status();
+    expect(s).toMatchObject({ needsReconnect: false, lastError: null });
+    expect(t.google.events()).toHaveLength(1);
+  });
+
+  it('holds syncs off while a reconnect swaps the calendar', async () => {
+    const t = await setup();
+    await t.createSchedule();
+    await t.connect();
+    await t.gcal.syncNow();
+    const first = [...t.google.calendars.keys()][0]!;
+    t.google.calendars.delete(first);
+    // A sync is in flight when the callback lands.
+    await t.createSchedule({ name: 'Two' });
+    const inflight = t.gcal.syncNow();
+    expect(await t.connect()).toMatch(/connected/);
+    await inflight;
+    await t.gcal.syncNow();
+    const cal = (await t.status()).calendarId!;
+    expect(t.google.calendars.has(cal)).toBe(true);
+    expect(
+      t.google
+        .events(cal)
+        .map((e) => e.summary)
+        .sort(),
+    ).toEqual(['💧 Lawn', '💧 Two']);
+    for (const row of t.db.select().from(gcalEvents).all())
+      expect(t.google.calendars.get(cal)!.events.has(row.eventId!)).toBe(true);
+  });
+
   it('disconnect revokes the token and keeps the calendar for next time', async () => {
     const t = await setup();
     await t.connect();

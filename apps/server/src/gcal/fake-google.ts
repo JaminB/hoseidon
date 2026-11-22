@@ -49,11 +49,14 @@ export class FakeGoogle {
   expiresIn = 3600;
   /** No recurring event has instances (e.g. the occurrence isn't in the series). */
   noInstances = false;
+  /** The token endpoint rejects our client (wrong secret, deleted OAuth client). */
+  rejectClient = false;
 
   private codes = new Map<string, { challenge: string; redirectUri: string; clientId: string }>();
   private refreshTokens = new Set<string>();
   private accessTokens = new Map<string, number>();
   private failures: Failure[] = [];
+  private lost: Failure[] = [];
   private seq = 0;
 
   constructor(private readonly now: () => number = Date.now) {}
@@ -87,6 +90,11 @@ export class FakeGoogle {
 
   failNext(match: Failure['match'], status: number, times = 1, reason?: string) {
     this.failures.push({ match, status, times, reason });
+  }
+
+  /** Do the next matching call, then answer with an error (the response got lost). */
+  loseNextResponse(match: Failure['match'], status = 503) {
+    this.lost.push({ match, status, times: 1 });
   }
 
   /** All events across calendars, cancelled ones excluded. */
@@ -127,10 +135,26 @@ export class FakeGoogle {
       failure.times--;
       return apiError(failure.status, `injected ${failure.status}`, failure.reason);
     }
-    return this.calendar(method, path.split('/').filter(Boolean).map(decodeURIComponent), body, u);
+    const res = this.calendar(
+      method,
+      path.split('/').filter(Boolean).map(decodeURIComponent),
+      body,
+      u,
+    );
+    const lost = this.lost.find((f) => f.times > 0 && f.match(method, decodeURIComponent(path)));
+    if (lost) {
+      lost.times--;
+      return apiError(lost.status, `response lost (${lost.status})`);
+    }
+    return res;
   }
 
   private token(p: URLSearchParams): Response {
+    if (this.rejectClient)
+      return json(401, {
+        error: 'invalid_client',
+        error_description: 'The OAuth client was not found.',
+      });
     const grant = p.get('grant_type');
     if (grant === 'authorization_code') {
       const entry = this.codes.get(p.get('code') ?? '');
@@ -195,7 +219,10 @@ export class FakeGoogle {
     }
     if (sub !== 'events') return apiError(404, 'Not Found', 'notFound');
     if (!eventId && method === 'POST') {
-      const id = `ev${++this.seq}`;
+      const id = (body as GEvent).id ?? `ev${++this.seq}`;
+      // Like Google: a client id can't be reused, even after the event was deleted.
+      if (cal.events.has(id))
+        return apiError(409, 'The requested identifier already exists.', 'duplicate');
       const ev = { ...(body as GEvent), id, status: (body as GEvent).status ?? 'confirmed' };
       cal.events.set(id, ev);
       return json(200, ev);

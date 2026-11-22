@@ -1,4 +1,5 @@
 /** The handful of Google Calendar v3 calls Hoseidon needs, over plain fetch. */
+import { randomBytes } from 'node:crypto';
 
 export const CALENDAR_API = 'https://www.googleapis.com/calendar/v3';
 
@@ -14,7 +15,27 @@ export class GoogleApiError extends Error {
   get gone() {
     return this.status === 404 || this.status === 410;
   }
+  /** Quota or rate limit: back off, never treat as "no access". */
+  get rateLimited() {
+    return (
+      this.status === 429 || (this.status === 403 && RATE_LIMIT_REASONS.has(this.reason ?? ''))
+    );
+  }
 }
+
+const RATE_LIMIT_REASONS = new Set([
+  'rateLimitExceeded',
+  'userRateLimitExceeded',
+  'quotaExceeded',
+  'dailyLimitExceeded',
+]);
+
+/**
+ * A fresh client-side event id (base32hex: 0-9 and a-v, 5-1024 chars; hex is a subset). Knowing
+ * the id before the insert lets a retry after a lost response find the event instead of
+ * creating a second one.
+ */
+export const newEventId = () => `h${randomBytes(16).toString('hex')}`;
 
 export interface EventDateTime {
   dateTime: string;

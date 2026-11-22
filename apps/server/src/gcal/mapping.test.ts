@@ -202,8 +202,8 @@ describe('run log events', () => {
     );
     expect(ev).toMatchObject({
       summary: '✓ Morning lawn · 10 min',
-      start: { dateTime: '2026-06-10T06:00:00', timeZone: 'America/New_York' },
-      end: { dateTime: '2026-06-10T06:30:00' },
+      start: { dateTime: '2026-06-10T10:00:00.000Z', timeZone: 'America/New_York' },
+      end: { dateTime: '2026-06-10T10:30:00.000Z' },
       extendedProperties: { private: { hoseidonKind: 'log' } },
     });
     expect(ev!.description).toContain('✓ Front Lawn: 10 min, 41 L');
@@ -237,9 +237,28 @@ describe('run log events', () => {
     );
     expect(ev).toMatchObject({
       summary: '✓ Veggie Beds · 10 min',
-      start: { dateTime: '2026-06-10T12:00:00', timeZone: 'UTC' },
-      end: { dateTime: '2026-06-10T12:10:00' },
+      start: { dateTime: '2026-06-10T12:00:00.000Z', timeZone: 'UTC' },
+      end: { dateTime: '2026-06-10T12:10:00.000Z' },
     });
     expect(ev!.description).toContain('Started by hand.');
+  });
+
+  it('keeps the repeated DST hour apart in run logs', () => {
+    const at = (iso: string) =>
+      runLogEvent(
+        {
+          id: 1,
+          deviceId: 'b',
+          source: 'manual',
+          startedAt: t(iso),
+          endedAt: new Date(t(iso).getTime() + 600_000),
+          durationSec: 600,
+          volumeMl: null,
+        },
+        'America/New_York',
+        ctx,
+      )!.start!.dateTime;
+    // Both are 01:10 local on 2026-11-01 (EDT, then EST).
+    expect(at('2026-11-01T05:10:00Z')).not.toBe(at('2026-11-01T06:10:00Z'));
   });
 });

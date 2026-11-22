@@ -11,7 +11,7 @@ import {
   type PlannedRunRow,
 } from '../db/schema';
 import type { Executor } from '../schedule/executor';
-import { GoogleApiError, type CalendarApi, type GEvent } from './calendar';
+import { GoogleApiError, newEventId, type CalendarApi, type GEvent } from './calendar';
 import {
   hashOf,
   occurrenceLogEvent,
@@ -239,6 +239,12 @@ export interface ItemError {
   message: string;
 }
 
+export interface ApplyResult {
+  errors: ItemError[];
+  /** Something was repaired that needs another pass (skips on a recreated series). */
+  again: boolean;
+}
+
 const isItemError = (err: unknown) => err instanceof GoogleApiError && err.status === 400;
 
 export async function applyOps(
@@ -248,9 +254,11 @@ export async function applyOps(
   ops: Op[],
   desired: Desired[],
   now: () => Date = () => new Date(),
-): Promise<ItemError[]> {
+): Promise<ApplyResult> {
   const want = new Map(desired.map((d) => [d.key, d]));
   const errors: ItemError[] = [];
+  /** Series recreated this pass (deleted in Google). */
+  const repaired = new Set<string>();
 
   const save = (item: Desired, eventId: string | null) => {
     const values = { kind: item.kind, eventId, hash: item.hash, at: item.at, syncedAt: now() };
@@ -268,14 +276,21 @@ export async function applyOps(
   const forget = (key: string) => db.delete(gcalEvents).where(eq(gcalEvents.key, key)).run();
   const rowOf = (key: string) => db.select().from(gcalEvents).where(eq(gcalEvents.key, key)).get();
 
-  const insert = async (event: GEvent) => {
+  /**
+   * Insert under an id we pick and record first (hash '' = unconfirmed). If the response is lost,
+   * the next pass sees the row as stale and updates that id (or inserts afresh on 404), so a
+   * retry never leaves an untracked duplicate behind.
+   */
+  const insert = async (item: Desired) => {
+    const id = newEventId();
+    save({ ...item, hash: '' }, id);
     try {
-      const created = await api.insertEvent(calendarId, event);
-      return created.id ?? null;
+      await api.insertEvent(calendarId, { ...item.event!, id });
     } catch (err) {
       if (err instanceof GoogleApiError && err.gone) throw new CalendarGoneError(err.message);
       throw err;
     }
+    save(item, id);
   };
 
   /** The series instance that starts at `at`, if Google has one. */
@@ -294,10 +309,22 @@ export async function applyOps(
   };
 
   const applySkip = async (item: Desired) => {
-    const parent = rowOf(item.skip!.parentKey);
+    const { parentKey, occurrenceAt } = item.skip!;
+    const parent = rowOf(parentKey);
     // The series didn't sync (yet); try again next time.
     if (!parent?.eventId) return;
-    const instanceId = await findInstance(parent.eventId, item.skip!.occurrenceAt);
+    let instanceId: string | null;
+    try {
+      instanceId = await findInstance(parent.eventId, occurrenceAt);
+    } catch (err) {
+      const series = want.get(parentKey);
+      if (!(err instanceof GoogleApiError && err.gone) || !series?.event) throw err;
+      // The series was deleted in Google. Make it again (a gone calendar surfaces from the insert
+      // as CalendarGoneError), then redo this series' other skips on a follow-up pass.
+      await insert(series);
+      repaired.add(parentKey);
+      instanceId = await findInstance(rowOf(parentKey)!.eventId!, occurrenceAt);
+    }
     if (instanceId) await api.patchEvent(calendarId, instanceId, item.skip!.overlay);
     save(item, instanceId);
   };
@@ -355,13 +382,22 @@ export async function applyOps(
         } catch (err) {
           // Deleted in Google: make it again below.
           if (!(err instanceof GoogleApiError && err.gone)) throw err;
+          if (item.kind === 'schedule') repaired.add(item.key);
         }
       }
-      save(item, await insert(item.event!));
+      await insert(item);
     } catch (err) {
       if (!isItemError(err)) throw err;
       errors.push({ key, message: (err as Error).message });
     }
   }
-  return errors;
+  // Skips annotated on a series we just recreated point at dead instances: mark them stale.
+  for (const parentKey of repaired) {
+    const prefix = `skip:${parentKey.split(':')[1]}:`;
+    for (const r of db.select().from(gcalEvents).where(eq(gcalEvents.kind, 'skip')).all()) {
+      if (r.key.startsWith(prefix))
+        db.update(gcalEvents).set({ hash: '' }).where(eq(gcalEvents.key, r.key)).run();
+    }
+  }
+  return { errors, again: repaired.size > 0 };
 }

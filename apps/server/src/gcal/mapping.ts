@@ -100,7 +100,10 @@ export function minutes(sec: number): string {
 
 const liters = (ml: number) => `${Math.round(ml / 100) / 10} L`;
 
-/** Floating wall "YYYY-MM-DDTHH:mm:ss" for Google's dateTime + timeZone pair. */
+/**
+ * Floating wall "YYYY-MM-DDTHH:mm:ss" for Google's dateTime + timeZone pair. Only for recurring
+ * series, which need wall time; one-off logs send UTC instants so a repeated DST hour stays exact.
+ */
 const wallString = (instant: Date, timeZone: string) =>
   toWall(instant, timeZone).toISOString().slice(0, 19);
 
@@ -243,9 +246,9 @@ export function occurrenceLogEvent(
     status: 'confirmed',
     summary: `✓ ${s.name} · ${minutes(total)}`,
     description: [...new Set(lines), '', 'Logged by Hoseidon 🔱.'].join('\n'),
-    start: { dateTime: wallString(start, s.timezone), timeZone: s.timezone },
+    start: { dateTime: start.toISOString(), timeZone: s.timezone },
     end: {
-      dateTime: wallString(end > start ? end : new Date(start.getTime() + 60_000), s.timezone),
+      dateTime: (end > start ? end : new Date(start.getTime() + 60_000)).toISOString(),
       timeZone: s.timezone,
     },
     colorId: nearestColorId(s.color),
@@ -275,8 +278,8 @@ export function runLogEvent(
       '',
       'Logged by Hoseidon 🔱.',
     ].join('\n'),
-    start: { dateTime: wallString(r.startedAt, timeZone), timeZone },
-    end: { dateTime: wallString(end, timeZone), timeZone },
+    start: { dateTime: r.startedAt.toISOString(), timeZone },
+    end: { dateTime: end.toISOString(), timeZone },
     colorId: SKIPPED_COLOR_ID,
     transparency: 'transparent',
     reminders: { useDefault: false },
