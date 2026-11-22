@@ -1,37 +1,35 @@
-import { useQuery } from '@tanstack/react-query';
+import { lazy } from 'react';
 import { Route, Routes } from 'react-router';
-import { fetchHealth } from './api';
+import { AppShell } from './components/layout/app-shell';
+import { HomePage } from './pages/home';
 
-function Home() {
-  const { data, isError, isPending } = useQuery({ queryKey: ['health'], queryFn: fetchHealth });
-  const status = isPending
-    ? 'Summoning the server…'
-    : isError
-      ? 'Server unreachable'
-      : 'Server online';
-
-  return (
-    <main className="mx-auto flex min-h-dvh max-w-md flex-col items-center justify-center gap-3 p-6 text-center">
-      <div className="text-6xl" aria-hidden>
-        🔱
-      </div>
-      <h1 className="text-3xl font-semibold tracking-tight">Hoseidon</h1>
-      <p className="text-neutral-500 dark:text-neutral-400">God of the garden hose.</p>
-      <p className="mt-4 inline-flex items-center gap-2 rounded-full border border-neutral-200 px-3 py-1 text-sm dark:border-neutral-800">
-        <span
-          className={`size-2 rounded-full ${isError ? 'bg-red-500' : isPending ? 'bg-neutral-400' : 'bg-aqua-500'}`}
-        />
-        {status}
-        {data?.mock ? ' (mock mode)' : ''}
-      </p>
-    </main>
-  );
-}
+// Home ships in the main bundle; the rest load on first visit.
+const DevicesPage = lazy(() => import('./pages/devices').then((m) => ({ default: m.DevicesPage })));
+const SchedulePage = lazy(() =>
+  import('./pages/schedule').then((m) => ({ default: m.SchedulePage })),
+);
+const SettingsPage = lazy(() =>
+  import('./pages/settings').then((m) => ({ default: m.SettingsPage })),
+);
+const AnalyticsPage = lazy(() =>
+  import('./pages/placeholders').then((m) => ({ default: m.AnalyticsPage })),
+);
+const NetworkPage = lazy(() =>
+  import('./pages/placeholders').then((m) => ({ default: m.NetworkPage })),
+);
 
 export function App() {
   return (
     <Routes>
-      <Route path="*" element={<Home />} />
+      <Route element={<AppShell />}>
+        <Route index element={<HomePage />} />
+        <Route path="devices" element={<DevicesPage />} />
+        <Route path="schedule" element={<SchedulePage />} />
+        <Route path="analytics" element={<AnalyticsPage />} />
+        <Route path="network" element={<NetworkPage />} />
+        <Route path="settings" element={<SettingsPage />} />
+        <Route path="*" element={<HomePage />} />
+      </Route>
     </Routes>
   );
 }
