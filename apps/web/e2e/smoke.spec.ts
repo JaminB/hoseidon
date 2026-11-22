@@ -263,3 +263,117 @@ test.describe('network', () => {
     await expect(page.getByRole('dialog').getByText('No active alarms')).toBeVisible();
   });
 });
+
+test.describe('google calendar', () => {
+  test.use({ viewport: { width: 1440, height: 900 } });
+
+  const status = (over: Record<string, unknown> = {}) => ({
+    configured: true,
+    missing: [],
+    redirectUri: 'https://hose.example.com/api/gcal/callback',
+    connected: true,
+    needsReconnect: false,
+    calendarId: 'abc@group.calendar.google.com',
+    calendarUrl: 'https://calendar.google.com/calendar/u/0/r?cid=abc',
+    connectedAt: new Date(Date.now() - 2 * 86_400_000).toISOString(),
+    reconnectDueAt: new Date(Date.now() + 5 * 86_400_000).toISOString(),
+    lastSyncAt: new Date(Date.now() - 4 * 60_000).toISOString(),
+    lastError: null,
+    sync: { state: 'idle', nextRunAt: null, failures: 0 },
+    events: { schedules: 5, skips: 2, logs: 0 },
+    logRuns: false,
+    ...over,
+  });
+
+  test('Settings explains setup when Google is not configured', async ({ page }) => {
+    await page.goto('/settings');
+    const card = page.getByTestId('gcal-card');
+    await expect(card.getByText('Not set up')).toBeVisible();
+    await expect(card.getByText('GOOGLE_CLIENT_ID')).toBeVisible();
+    await expect(card.getByText(/\/api\/gcal\/callback/)).toBeVisible();
+    await card.scrollIntoViewIfNeeded();
+    await page.screenshot({ path: 'e2e/__screenshots__/gcal-unconfigured-desktop-light.png' });
+  });
+
+  for (const scheme of SCHEMES) {
+    test(`connected card (${scheme})`, async ({ page }) => {
+      await page.emulateMedia({ colorScheme: scheme });
+      await page.route('**/api/gcal/status', (r) => r.fulfill({ json: status() }));
+      await page.goto('/settings');
+      const card = page.getByTestId('gcal-card');
+      await expect(card.getByText('Connected')).toBeVisible();
+      await expect(card.getByText('Synced 4 min ago')).toBeVisible();
+      await expect(card.getByText('5 schedules · 2 skipped')).toBeVisible();
+      await card.scrollIntoViewIfNeeded();
+      await page.waitForTimeout(250);
+      await card.screenshot({ path: `e2e/__screenshots__/gcal-connected-desktop-${scheme}.png` });
+    });
+  }
+
+  test('a dead token shows a banner app-wide and a reconnect card', async ({ page }) => {
+    await page.route('**/api/gcal/status', (r) =>
+      r.fulfill({
+        json: status({
+          needsReconnect: true,
+          lastError: 'Google revoked or expired the connection',
+          sync: { state: 'paused', nextRunAt: null, failures: 0 },
+        }),
+      }),
+    );
+    await page.goto('/');
+    const banner = page.getByRole('status').filter({ hasText: 'Google Calendar sync is paused' });
+    await expect(banner).toBeVisible();
+    await page.screenshot({ path: 'e2e/__screenshots__/gcal-banner-desktop-light.png' });
+    await banner.getByRole('link', { name: 'Reconnect' }).click();
+    await expect(page).toHaveURL(/\/settings$/);
+    await expect(banner).toBeHidden();
+    const card = page.getByTestId('gcal-card');
+    await expect(card.getByText('Reconnect needed')).toBeVisible();
+    await expect(card.getByRole('link', { name: 'Reconnect' })).toHaveAttribute(
+      'href',
+      '/api/gcal/connect',
+    );
+    await card.scrollIntoViewIfNeeded();
+    await card.screenshot({ path: 'e2e/__screenshots__/gcal-reconnect-desktop-light.png' });
+  });
+
+  test('the OAuth redirect back shows a toast and cleans the URL', async ({ page }) => {
+    await page.goto('/settings?gcal=error&reason=scope');
+    await expect(page.getByText('Couldn’t connect Google Calendar', { exact: true })).toBeVisible();
+    await expect(page.getByText(/Calendar access was unticked/).first()).toBeVisible();
+    await expect(page).toHaveURL(/\/settings$/);
+  });
+});
+
+test.describe('google calendar phone', () => {
+  test.use({ viewport: { width: 390, height: 844 }, colorScheme: 'dark' });
+
+  test('connected card on a phone', async ({ page }) => {
+    await page.route('**/api/gcal/status', (r) =>
+      r.fulfill({
+        json: {
+          configured: true,
+          missing: [],
+          redirectUri: 'https://hose.example.com/api/gcal/callback',
+          connected: true,
+          needsReconnect: false,
+          calendarId: 'abc@group.calendar.google.com',
+          calendarUrl: 'https://calendar.google.com/calendar/u/0/r?cid=abc',
+          connectedAt: new Date(Date.now() - 6 * 86_400_000).toISOString(),
+          reconnectDueAt: new Date(Date.now() + 86_400_000).toISOString(),
+          lastSyncAt: new Date().toISOString(),
+          lastError: null,
+          sync: { state: 'idle', nextRunAt: null, failures: 0 },
+          events: { schedules: 5, skips: 0, logs: 12 },
+          logRuns: true,
+        },
+      }),
+    );
+    await page.goto('/settings');
+    const card = page.getByTestId('gcal-card');
+    await expect(card.getByText(/Testing-mode access expires/)).toBeVisible();
+    await card.scrollIntoViewIfNeeded();
+    await page.waitForTimeout(250);
+    await card.screenshot({ path: 'e2e/__screenshots__/gcal-connected-phone-dark.png' });
+  });
+});

@@ -8,6 +8,7 @@ import {
   eventSchema,
   gatewaySchema,
   gatewayWithDevicesSchema,
+  gcalStatusSchema,
   healthSchema,
   networkOverviewSchema,
   networkSettingsSchema,
@@ -135,12 +136,20 @@ export const api = {
     }),
   diagnose: (deviceId: string) =>
     request(`/diagnose/${deviceId}`, diagnosisSchema, { method: 'POST' }),
+  gcalStatus: () => request('/gcal/status', gcalStatusSchema),
+  gcalDisconnect: () => request('/gcal/disconnect', gcalStatusSchema, { method: 'POST' }),
+  gcalResync: () => request('/gcal/resync', gcalStatusSchema, { method: 'POST' }),
+  gcalSettings: (logRuns: boolean) =>
+    request('/gcal/settings', gcalStatusSchema, { method: 'PATCH', body: { logRuns } }),
   skipPlannedRun: (id: number, wholeOccurrence = true) =>
     request(`/planned-runs/${id}/skip`, z.array(plannedRunSchema), {
       method: 'POST',
       body: { wholeOccurrence },
     }),
 };
+
+/** The OAuth flow is a full-page navigation: the server redirects to Google and back. */
+export const GCAL_CONNECT_URL = '/api/gcal/connect';
 
 /** Open-Meteo geocoding (free, no key, CORS-enabled). Called straight from the browser. */
 const geocodeSchema = z.object({

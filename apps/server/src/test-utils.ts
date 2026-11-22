@@ -6,6 +6,7 @@ import { LinkTapMock, type MockOptions } from './linktap/mock';
 import { Poller } from './poller';
 import { SchedulerEngine, type EngineOptions } from './schedule/engine';
 import { CloudExecutor } from './schedule/executor';
+import { GcalService, type GcalOptions } from './gcal/service';
 import { mockOpenMeteoFetch } from './weather/mock';
 import { OpenMeteoProvider } from './weather/open-meteo';
 
@@ -27,6 +28,7 @@ export function harness(
     env?: NodeJS.ProcessEnv;
     engine?: Partial<EngineOptions>;
     weatherFetch?: typeof fetch;
+    gcal?: Partial<GcalOptions>;
   } = {},
 ) {
   const { db, sqlite } = openDb(':memory:');
@@ -51,6 +53,7 @@ export function harness(
   const executor = new CloudExecutor({ client, verifyDelayMs: 0 });
   const weather = new OpenMeteoProvider({ db, fetch: opts.weatherFetch ?? mockOpenMeteoFetch });
   const scheduler = new SchedulerEngine({ db, executor, ...opts.engine });
+  const gcal = new GcalService({ db, config, timeZone: 'UTC', executor, ...opts.gcal });
   const app = createApp({
     config,
     db,
@@ -60,6 +63,7 @@ export function harness(
     executor,
     weather,
     timeZone: 'UTC',
+    gcal,
   });
-  return { db, sqlite, mock, client, poller, executor, scheduler, weather, app, config };
+  return { db, sqlite, mock, client, poller, executor, scheduler, weather, gcal, app, config };
 }

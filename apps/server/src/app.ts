@@ -13,6 +13,8 @@ import { hookRoutes } from './api/hooks';
 import { analyticsRoutes } from './api/analytics';
 import { networkRoutes } from './api/network';
 import { scheduleRoutes } from './api/schedules';
+import { gcalRoutes } from './api/gcal';
+import { GcalService } from './gcal/service';
 import type { OpenMeteoProvider } from './weather/open-meteo';
 import type { SchedulerEngine } from './schedule/engine';
 import type { Executor } from './schedule/executor';
@@ -20,7 +22,10 @@ import type { Executor } from './schedule/executor';
 const VERSION = '0.1.0';
 
 export const redactSecrets = (line: string) =>
-  line.replace(/(\/hooks\/linktap\/)[^\s?#]+/g, '$1***');
+  line
+    .replace(/(\/hooks\/linktap\/)[^\s?#]+/g, '$1***')
+    // OAuth codes and state on the Google callback.
+    .replace(/([?&](?:code|state)=)[^\s&#]+/g, '$1***');
 
 export interface AppDeps {
   config: Config;
@@ -30,6 +35,8 @@ export interface AppDeps {
   scheduler?: SchedulerEngine;
   executor?: Executor;
   weather?: OpenMeteoProvider;
+  /** Google Calendar sync. Default: one built from config (idle until connected). */
+  gcal?: GcalService;
   /** Default schedule time zone when a gateway has none. Default: the server's. */
   timeZone?: string;
 }
@@ -43,6 +50,7 @@ export function createApp({
   executor,
   weather,
   timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone,
+  gcal = new GcalService({ db, config, timeZone, executor }),
 }: AppDeps) {
   const app = new Hono();
   if (process.env.NODE_ENV !== 'test') {
@@ -61,7 +69,11 @@ export function createApp({
     return c.json(body);
   });
   api.route('/', apiRoutes({ db, linktap, poller, mock: config.LINKTAP_MOCK }));
-  api.route('/', scheduleRoutes({ db, scheduler, executor, timeZone }));
+  api.route(
+    '/',
+    scheduleRoutes({ db, scheduler, executor, timeZone, onChange: () => gcal.request() }),
+  );
+  api.route('/', gcalRoutes({ gcal }));
   api.route('/', analyticsRoutes({ db, weather, timeZone }));
   api.route(
     '/',

@@ -29,6 +29,8 @@ export interface ScheduleApiDeps {
   executor?: Pick<Executor, 'quantize'>;
   /** Fallback when neither the request nor the first zone's gateway has a time zone. */
   timeZone: string;
+  /** Called after anything a calendar shows changes (create, edit, delete, skip). */
+  onChange?: () => void;
 }
 
 const DAY = 86_400_000;
@@ -46,7 +48,13 @@ const TIMING_FIELDS = [
 
 const quickAddSchema = z.object({ text: z.string().trim().min(1).max(300) });
 
-export function scheduleRoutes({ db, scheduler, executor, timeZone }: ScheduleApiDeps) {
+export function scheduleRoutes({
+  db,
+  scheduler,
+  executor,
+  timeZone,
+  onChange = () => {},
+}: ScheduleApiDeps) {
   const api = new Hono();
   api.onError(onApiError);
 
@@ -143,6 +151,7 @@ export function scheduleRoutes({ db, scheduler, executor, timeZone }: ScheduleAp
       .returning()
       .get();
     scheduler?.rematerialize(row.id, now);
+    onChange();
     return c.json(present(row), 201);
   });
 
@@ -191,6 +200,7 @@ export function scheduleRoutes({ db, scheduler, executor, timeZone }: ScheduleAp
       .returning()
       .get()!;
     if (retime) scheduler?.rematerialize(row.id, now);
+    onChange();
     return c.json(present(row));
   });
 
@@ -198,6 +208,7 @@ export function scheduleRoutes({ db, scheduler, executor, timeZone }: ScheduleAp
     const row = find(c.req.param('id'));
     // Planned runs cascade. Anything already watering finishes on its own timer.
     db.delete(schedules).where(eq(schedules.id, row.id)).run();
+    onChange();
     return c.body(null, 204);
   });
 
@@ -253,6 +264,7 @@ export function scheduleRoutes({ db, scheduler, executor, timeZone }: ScheduleAp
       )
       .returning()
       .all();
+    onChange();
     return c.json(skipped.map(toPlannedRun));
   });
 

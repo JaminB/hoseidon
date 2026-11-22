@@ -300,6 +300,9 @@ describe('review hardening', () => {
     expect(redactSecrets('<-- POST /hooks/linktap/s3cret?x=1')).toBe(
       '<-- POST /hooks/linktap/***?x=1',
     );
+    expect(redactSecrets('--> GET /api/gcal/callback?code=4/abc&state=xyz 302')).toBe(
+      '--> GET /api/gcal/callback?code=***&state=*** 302',
+    );
   });
 
   it('dismissing one alarm keeps alarms a poll added meanwhile', async () => {

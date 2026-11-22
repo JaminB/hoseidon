@@ -1,5 +1,9 @@
 import { Monitor, Moon, Sun } from 'lucide-react';
-import type { ReactNode } from 'react';
+import { useEffect, useRef, type ReactNode } from 'react';
+import { useSearchParams } from 'react-router';
+import { GcalCard } from '../components/gcal-card';
+import { toast } from '../components/ui/toast';
+import { connectErrorMessage } from '../lib/gcal';
 import { Page, PageHeader } from '../components/layout/app-shell';
 import { Badge } from '../components/ui/badge';
 import { Card, CardHeader } from '../components/ui/card';
@@ -14,6 +18,7 @@ export function SettingsPage() {
   const health = useHealth();
   const status = useLinkTapStatus();
   const now = useNow(1000);
+  useGcalRedirectToast();
 
   const wait = (iso?: string) => {
     if (!iso) return '—';
@@ -86,6 +91,8 @@ export function SettingsPage() {
           </dl>
         </Card>
 
+        <GcalCard />
+
         <Card>
           <CardHeader title="About" />
           <dl className="divide-line border-line divide-y border-t">
@@ -105,6 +112,25 @@ export function SettingsPage() {
       </div>
     </Page>
   );
+}
+
+/** The OAuth callback lands here with ?gcal=connected or ?gcal=error&reason=…; say how it went. */
+function useGcalRedirectToast() {
+  const [params, setParams] = useSearchParams();
+  const result = params.get('gcal');
+  const reason = params.get('reason');
+  // StrictMode runs effects twice in dev; toast once per redirect.
+  const handled = useRef<string | null>(null);
+  useEffect(() => {
+    if (!result || handled.current === `${result}:${reason}`) return;
+    handled.current = `${result}:${reason}`;
+    if (result === 'connected') {
+      toast.success('Google Calendar connected', 'Your schedules are on their way.');
+    } else {
+      toast.error('Couldn’t connect Google Calendar', connectErrorMessage(reason));
+    }
+    setParams({}, { replace: true });
+  }, [result, reason, setParams]);
 }
 
 function Row({ label, children }: { label: string; children: ReactNode }) {
