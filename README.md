@@ -64,6 +64,9 @@ desktop, light and dark) to `apps/web/e2e/__screenshots__/`. CI uploads them as 
 
 ## Deploying to Cloudflare Workers (recommended, free)
 
+CI deploys on every merge to `main` (skipped until the Cloudflare token is set). Step-by-step
+setup, secrets and free-tier guidance: [docs/deploy.md](docs/deploy.md).
+
 Hoseidon fits the **Workers Free plan**: no paid plan, no paid add-ons, no credit card. One
 Worker serves the built PWA as static assets and forwards `/api/*` and `/hooks/*` to a single
 SQLite-backed Durable Object ("Brain") that runs the API, the poller, the scheduler, push and

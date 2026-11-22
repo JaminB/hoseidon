@@ -601,3 +601,20 @@ Real 1-minute instant runs on a 4-outlet ValveLinker. Details in `docs/linktap-a
 - README: real taps stay on Node until phases D and F.
 - The workerd smoke test now decrypts a real push captured by a local sink, checks the cron's
   `ensureAlarm` via its log line, and each test sets up its own login and first poll.
+
+## Phase C: CI/CD deploy (branch ci/cloudflare-deploy)
+
+- `.github/workflows/ci.yml`: `check` gains an explicit `wrangler deploy --dry-run` step (PR
+  preview of the bundle, no credentials). New `deploy` job: push to main only, needs
+  check+docker+e2e, `environment: production`, queued (not cancelled) via a concurrency group.
+- Skips cleanly: a first step checks CLOUDFLARE_API_TOKEN / CLOUDFLARE_ACCOUNT_ID and every later
+  step is gated on it, so CI is green until the user adds them.
+- Uses the repo-pinned wrangler (4.160.1) through pnpm instead of wrangler-action: no extra
+  third-party action to pin. Order: `pnpm build` (web first, migrations check) -> `wrangler deploy`
+  -> `wrangler secret bulk` (non-empty secrets only, built with jq, piped on stdin) -> curl
+  `/api/health` (URL from the `CLOUDFLARE_WORKER_URL` variable, else parsed from deploy output).
+- Optional vars LINKTAP_MOCK, ENGINE_ENABLED, PUBLIC_URL, TZ override wrangler.jsonc via `--var`.
+- Docker job kept: the Node target still exists (self-host fallback), image is built, not pushed.
+- Added docs/deploy.md and a README link. The workflow was NOT executed (no Cloudflare
+  credentials); only YAML/lint were checked locally. First real run happens on the first merge
+  after the user adds the secrets.
