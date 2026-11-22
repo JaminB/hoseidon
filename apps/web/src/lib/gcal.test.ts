@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { GcalStatus } from '@hoseidon/shared';
-import { eventCounts, gcalPhase, reconnectHint, syncLabel } from './gcal';
+import { connectErrorMessage, eventCounts, gcalPhase, reconnectHint, syncLabel } from './gcal';
 
 const NOW = Date.parse('2026-06-10T12:00:00Z');
 const status = (over: Partial<GcalStatus> = {}): GcalStatus => ({
@@ -66,5 +66,18 @@ describe('eventCounts', () => {
     expect(eventCounts(status({ events: { schedules: 1, skips: 2, logs: 1 } }))).toBe(
       '1 schedule · 2 skipped · 1 logged run',
     );
+  });
+});
+
+describe('connectErrorMessage', () => {
+  it('maps known reasons and passes unknown ones through as text', () => {
+    expect(connectErrorMessage('denied')).toBe('Google access was declined.');
+    expect(connectErrorMessage('weird')).toBe('weird');
+    expect(connectErrorMessage(null)).toBeUndefined();
+  });
+
+  it('never returns prototype members', () => {
+    expect(connectErrorMessage('__proto__')).toBe('__proto__');
+    expect(connectErrorMessage('toString')).toBe('toString');
   });
 });

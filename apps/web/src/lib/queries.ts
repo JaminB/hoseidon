@@ -90,10 +90,14 @@ export const useGcalStatus = () =>
       ['pending', 'running'].includes(q.state.data?.sync.state ?? '') ? 3_000 : 60_000,
   });
 
+/** Google Calendar writes run one at a time, so the last toggle the user made is what's saved. */
+const gcalScope = { id: 'gcal' };
+
 function useGcalMutation<T>(fn: (arg: T) => Promise<GcalStatus>, failure: string) {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: fn,
+    scope: gcalScope,
     onSuccess: (status) => qc.setQueryData(keys.gcal, status),
     onError: (err) => toast.error(failure, errorMessage(err)),
   });

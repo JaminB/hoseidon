@@ -13,6 +13,12 @@ export const CONNECT_ERRORS: Record<string, string> = {
   not_configured: 'Google Calendar isn’t set up on the server yet.',
 };
 
+/** Message for a `?reason=` from the callback redirect. Own keys only: it comes from the URL. */
+export function connectErrorMessage(reason: string | null): string | undefined {
+  if (!reason) return undefined;
+  return Object.hasOwn(CONNECT_ERRORS, reason) ? CONNECT_ERRORS[reason] : reason;
+}
+
 export type GcalPhase = 'unconfigured' | 'disconnected' | 'reconnect' | 'connected';
 
 export function gcalPhase(s: GcalStatus): GcalPhase {

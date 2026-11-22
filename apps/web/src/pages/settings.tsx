@@ -3,7 +3,7 @@ import { useEffect, useRef, type ReactNode } from 'react';
 import { useSearchParams } from 'react-router';
 import { GcalCard } from '../components/gcal-card';
 import { toast } from '../components/ui/toast';
-import { CONNECT_ERRORS } from '../lib/gcal';
+import { connectErrorMessage } from '../lib/gcal';
 import { Page, PageHeader } from '../components/layout/app-shell';
 import { Badge } from '../components/ui/badge';
 import { Card, CardHeader } from '../components/ui/card';
@@ -127,10 +127,7 @@ function useGcalRedirectToast() {
     if (result === 'connected') {
       toast.success('Google Calendar connected', 'Your schedules are on their way.');
     } else {
-      toast.error(
-        'Couldn’t connect Google Calendar',
-        CONNECT_ERRORS[reason ?? ''] ?? reason ?? undefined,
-      );
+      toast.error('Couldn’t connect Google Calendar', connectErrorMessage(reason));
     }
     setParams({}, { replace: true });
   }, [result, reason, setParams]);
