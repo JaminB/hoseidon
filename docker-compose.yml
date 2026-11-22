@@ -1,0 +1,27 @@
+services:
+  hoseidon:
+    build: .
+    image: hoseidon:latest
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DATABASE_PATH: /data/hoseidon.sqlite
+    ports:
+      - '8787:8787'
+    volumes:
+      - hoseidon-data:/data
+
+  # Optional: public HTTPS for LinkTap webhooks, Google push and off-LAN PWA install.
+  #   docker compose --profile tunnel up -d
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    profiles: ['tunnel']
+    restart: unless-stopped
+    command: tunnel --no-autoupdate run
+    environment:
+      TUNNEL_TOKEN: ${CLOUDFLARE_TUNNEL_TOKEN}
+    depends_on:
+      - hoseidon
+
+volumes:
+  hoseidon-data:
