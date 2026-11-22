@@ -28,6 +28,8 @@ export interface ServiceOptions {
   /** Persisted LinkTap call times. */
   lastCallStore?: LastCallStore;
   passwordScheme?: PasswordScheme;
+  /** Sign session tokens under SESSION_SECRET (Workers: the edge rejects unsigned ones). */
+  signTokens?: boolean;
   /** External timers: persist the post-run history reconcile. */
   scheduleReconcile?: (deviceId: string, at: Date) => void;
   /** Replaces the LinkTap mock / real client (tests). */
@@ -82,7 +84,13 @@ export function createServices(o: ServiceOptions): Services {
     executor,
     timers: o.timers,
   });
-  const auth = new AuthService({ db, config, log, passwordScheme: o.passwordScheme });
+  const auth = new AuthService({
+    db,
+    config,
+    log,
+    passwordScheme: o.passwordScheme,
+    signTokens: o.signTokens,
+  });
   const push = new PushService({ db, config, log });
   return {
     linktap,

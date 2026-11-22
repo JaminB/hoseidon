@@ -1,5 +1,6 @@
 /** The handful of Google Calendar v3 calls Hoseidon needs, over plain fetch. */
 import { randomBytes } from 'node:crypto';
+import { GOOGLE_TIMEOUT_MS } from './oauth';
 
 export const CALENDAR_API = 'https://www.googleapis.com/calendar/v3';
 
@@ -125,6 +126,7 @@ export class CalendarApi {
         ...(body === undefined ? {} : { 'content-type': 'application/json' }),
       },
       body: body === undefined ? undefined : JSON.stringify(body),
+      signal: AbortSignal.timeout(GOOGLE_TIMEOUT_MS),
     });
     // An access token can die early (revoked, clock skew): refresh once and retry.
     if (res.status === 401 && !retried) return this.call<T>(method, path, body, true);

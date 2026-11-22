@@ -19,10 +19,13 @@ import {
   takeEphemeral,
 } from '../db/ephemeral';
 import { passkeys, sessions } from '../db/schema';
+import { fingerprint, signToken, hasValidSignature } from './token';
 import { hashPassword, schemeOf, verifyPassword, type PasswordScheme } from './password';
 
 export const SESSION_TTL_MS = 30 * 24 * 3600_000;
 const HASH_KEY = 'auth.passwordHash';
+/** HMAC of the env password under SESSION_SECRET: when it matches, the slow KDF check is skipped. */
+const FP_KEY = 'auth.passwordFp';
 const CHALLENGE_TTL_MS = 5 * 60_000;
 /** After this many wrong passwords from one client in the window, its logins are refused. */
 const MAX_FAILURES = 8;
@@ -44,6 +47,8 @@ export interface AuthOptions {
   log?: (msg: string) => void;
   /** How a new password hash is made. Default scrypt; Workers use pbkdf2 (CPU budget). */
   passwordScheme?: PasswordScheme;
+  /** Session tokens carry an HMAC under SESSION_SECRET (Workers: the edge checks it). */
+  signTokens?: boolean;
 }
 
 const FAIL_PREFIX = 'loginfail:';
@@ -76,15 +81,25 @@ export class AuthService {
       if (stored) {
         // Removing the env value revokes the password instead of leaving the old one working.
         deleteSetting(db, HASH_KEY);
+        deleteSetting(db, FP_KEY);
         db.delete(sessions).run();
       }
       log?.('ADMIN_PASSWORD is not set: nobody can sign in until it is.');
       return;
     }
     const scheme = this.o.passwordScheme ?? 'scrypt';
+    // Without SESSION_SECRET there is no safe fingerprint (a bare hash would be a fast oracle for
+    // the password), so the full check runs.
+    const secret = config.SESSION_SECRET;
+    const fp = secret ? fingerprint(secret, `${scheme}:${config.ADMIN_PASSWORD}`) : null;
+    if (stored && fp && getSetting(db, FP_KEY) === fp && schemeOf(stored) === scheme) return;
     const same = !!stored && (await verifyPassword(config.ADMIN_PASSWORD, stored));
-    if (same && schemeOf(stored) === scheme) return;
+    if (same && schemeOf(stored) === scheme) {
+      if (fp) setSetting(db, FP_KEY, fp);
+      return;
+    }
     setSetting(db, HASH_KEY, await hashPassword(config.ADMIN_PASSWORD, scheme));
+    if (fp) setSetting(db, FP_KEY, fp);
     // A changed password signs everyone out (a re-hash of the same one under another scheme doesn't).
     if (stored && !same) db.delete(sessions).run();
   }
@@ -151,7 +166,8 @@ export class AuthService {
       .where(lt(sessions.expiresAt, new Date(now)))
       .run();
     pruneEphemeral(db, new Date(now));
-    const token = randomBytes(32).toString('base64url');
+    const id = randomBytes(32).toString('base64url');
+    const token = this.signing ? signToken(id, this.o.config.SESSION_SECRET) : id;
     const expiresAt = new Date(now + SESSION_TTL_MS);
     db.insert(sessions)
       .values({ id: sha256(token), expiresAt })
@@ -159,8 +175,13 @@ export class AuthService {
     return { token, expiresAt };
   }
 
+  private get signing(): boolean {
+    return !!this.o.signTokens && !!this.o.config.SESSION_SECRET;
+  }
+
   isValid(token: string | undefined): boolean {
     if (!token) return false;
+    if (this.signing && !hasValidSignature(token, this.o.config.SESSION_SECRET)) return false;
     const row = this.o.db
       .select()
       .from(sessions)

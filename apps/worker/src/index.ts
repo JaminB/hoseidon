@@ -4,7 +4,7 @@ import { migrate } from 'drizzle-orm/durable-sqlite/migrator';
 import * as schema from '@hoseidon/server/db/schema';
 import type { Db } from '@hoseidon/server/db/types';
 import { BrainCore } from '@hoseidon/server/runtime/brain';
-import { edgeCheck } from './edge';
+import { edgeCheck, type EdgeEnv } from './edge';
 import migrations from './migrations.gen';
 
 /**
@@ -62,7 +62,7 @@ export default {
     if (!pathname.startsWith('/api/') && !pathname.startsWith('/hooks/')) {
       return env.ASSETS.fetch(request);
     }
-    return edgeCheck(request) ?? brain(env).fetch(request);
+    return (await edgeCheck(request, env as unknown as EdgeEnv)) ?? brain(env).fetch(request);
   },
 
   async scheduled(_controller, env, ctx) {

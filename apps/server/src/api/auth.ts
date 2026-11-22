@@ -4,6 +4,7 @@ import { z } from 'zod';
 import { loginInputSchema, type AuthSession, type Passkey } from '@hoseidon/shared';
 import { SESSION_COOKIE } from '../auth/guard';
 import type { AuthService } from '../auth/service';
+import { clientKey } from '../auth/token';
 import type { PasskeyRow } from '../db/schema';
 import { body, HttpError, onApiError } from './http';
 
@@ -47,7 +48,7 @@ export function authRoutes({
     if (trustProxy) {
       const fromProxy =
         c.req.header('cf-connecting-ip') ?? c.req.header('x-forwarded-for')?.split(',')[0]?.trim();
-      if (fromProxy) return fromProxy;
+      if (fromProxy) return clientKey(fromProxy);
     }
     try {
       return clientIp?.(c) ?? 'unknown';
