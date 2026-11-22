@@ -5,12 +5,30 @@ import { logger } from 'hono/logger';
 import { serveStatic } from '@hono/node-server/serve-static';
 import type { Health } from '@hoseidon/shared';
 import type { Config } from './config';
+import type { Db } from './db';
+import type { LinkTapClient } from './linktap/client';
+import type { Poller } from './poller';
+import { apiRoutes } from './api/routes';
+import { hookRoutes } from './api/hooks';
 
 const VERSION = '0.1.0';
 
-export function createApp(config: Config) {
+export const redactSecrets = (line: string) =>
+  line.replace(/(\/hooks\/linktap\/)[^\s?#]+/g, '$1***');
+
+export interface AppDeps {
+  config: Config;
+  db: Db;
+  linktap: LinkTapClient;
+  poller?: Poller;
+}
+
+export function createApp({ config, db, linktap, poller }: AppDeps) {
   const app = new Hono();
-  if (process.env.NODE_ENV !== 'test') app.use(logger());
+  if (process.env.NODE_ENV !== 'test') {
+    // The webhook secret lives in the path; keep it out of the logs.
+    app.use(logger((msg, ...rest) => console.log(redactSecrets(msg), ...rest)));
+  }
 
   const api = new Hono();
   api.get('/health', (c) => {
@@ -22,8 +40,19 @@ export function createApp(config: Config) {
     };
     return c.json(body);
   });
+  api.route('/', apiRoutes({ db, linktap, poller, mock: config.LINKTAP_MOCK }));
   api.all('*', (c) => c.json({ error: 'not found' }, 404));
   app.route('/api', api);
+
+  app.route(
+    '/hooks',
+    hookRoutes({
+      db,
+      secret: config.WEBHOOK_SECRET,
+      username: config.LINKTAP_USERNAME || undefined,
+      onEvent: () => void poller?.pollRunning(),
+    }),
+  );
 
   // Production: serve the built PWA, with SPA fallback to index.html.
   const webRoot = resolve(config.WEB_DIST);

@@ -4,3 +4,4 @@ pnpm-lock.yaml
 pnpm-workspace.yaml
 data
 dev-dist
+apps/server/drizzle/meta
