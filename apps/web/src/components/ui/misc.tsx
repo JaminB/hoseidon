@@ -1,4 +1,4 @@
-import type { LucideIcon } from 'lucide-react';
+import { CircleAlert, type LucideIcon } from 'lucide-react';
 import type { HTMLAttributes, ReactNode } from 'react';
 import { cn } from '../../lib/cn';
 
@@ -103,5 +103,21 @@ export function Kbd({ children }: { children: ReactNode }) {
     <kbd className="border-line bg-surface-2 text-subtle inline-flex h-5 min-w-5 items-center justify-center rounded border px-1 font-mono text-[11px]">
       {children}
     </kbd>
+  );
+}
+
+/** Inline notice for a failed read, so a broken fetch never looks like "all quiet". */
+export function ErrorBanner({ title, error }: { title: string; error: unknown }) {
+  return (
+    <div
+      role="alert"
+      className="border-danger/30 bg-danger-soft text-danger mb-5 flex gap-3 rounded-xl border px-4 py-3 text-[13px]"
+    >
+      <CircleAlert className="mt-0.5 size-4 shrink-0" />
+      <p>
+        <span className="font-medium">{title}.</span>{' '}
+        {error instanceof Error ? error.message : 'Try again in a moment.'}
+      </p>
+    </div>
   );
 }

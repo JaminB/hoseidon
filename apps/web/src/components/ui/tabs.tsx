@@ -1,4 +1,4 @@
-import { Tabs as T } from 'radix-ui';
+import { RadioGroup, Tabs as T } from 'radix-ui';
 import type { ReactNode } from 'react';
 import { cn } from '../../lib/cn';
 
@@ -30,7 +30,7 @@ export function TabsTrigger({ value, children }: { value: string; children: Reac
   );
 }
 
-/** A segmented control for small choices outside of tab panels. */
+/** A segmented control for small choices outside of tab panels (Radix RadioGroup: arrow keys). */
 export function Segmented<V extends string>({
   value,
   onChange,
@@ -45,26 +45,25 @@ export function Segmented<V extends string>({
   label: string;
 }) {
   return (
-    <div
-      role="radiogroup"
+    <RadioGroup.Root
+      value={value}
+      onValueChange={(v) => onChange(v as V)}
       aria-label={label}
+      orientation="horizontal"
       className={cn('bg-surface-2 border-line inline-flex rounded-lg border p-0.5', className)}
     >
       {options.map((o) => (
-        <button
+        <RadioGroup.Item
           key={o.value}
-          type="button"
-          role="radio"
-          aria-checked={value === o.value}
-          onClick={() => onChange(o.value)}
+          value={o.value}
           className={cn(
             'inline-flex h-7 flex-1 items-center justify-center gap-1.5 rounded-md px-3 text-[13px] font-medium transition-colors',
-            value === o.value ? 'bg-surface text-fg shadow-xs' : 'text-muted hover:text-fg',
+            'text-muted hover:text-fg data-[state=checked]:bg-surface data-[state=checked]:text-fg data-[state=checked]:shadow-xs',
           )}
         >
           {o.label}
-        </button>
+        </RadioGroup.Item>
       ))}
-    </div>
+    </RadioGroup.Root>
   );
 }

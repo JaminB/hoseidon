@@ -30,5 +30,6 @@ export default defineConfig({
     port: 5173,
     proxy: { '/api': api, '/hooks': api },
   },
-  test: { include: ['src/**/*.test.ts'] },
+  // A fixed zone with DST, so the calendar tests mean the same thing on every machine.
+  test: { include: ['src/**/*.test.ts'], env: { TZ: 'America/New_York' } },
 });

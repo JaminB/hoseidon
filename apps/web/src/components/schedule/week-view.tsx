@@ -153,7 +153,9 @@ function DayColumn({
   onOpen: (scheduleId: number) => void;
 }) {
   const ref = useRef<HTMLDivElement>(null);
-  const [drag, setDrag] = useState<{ from: number; to: number } | null>(null);
+  const [drag, setDrag] = useState<{ from: number; to: number; moved: boolean } | null>(null);
+  // Touch: where the finger went down. A scroll cancels the pointer, so only a real tap creates.
+  const tap = useRef<{ y: number; minute: number } | null>(null);
   const laid = useMemo(() => layoutDay(blocks, day), [blocks, day]);
   const isToday = sameDay(day, new Date(now));
   const isPast = addDays(day, 1).getTime() <= now;
@@ -167,24 +169,40 @@ function DayColumn({
     if (e.button !== 0 || e.target !== e.currentTarget) return;
     const m = minuteAt(e.clientY);
     if (e.pointerType !== 'mouse') {
-      // Touch: a tap makes a 30 min block (dragging would fight scrolling).
-      const start = Math.floor(m / 15) * 15;
-      onCreate(day, start, Math.min(MIN_PER_DAY, start + 30));
+      // Touch: a tap (not a scroll) makes a 30 min block; dragging would fight scrolling.
+      tap.current = { y: e.clientY, minute: m };
       return;
     }
     e.currentTarget.setPointerCapture(e.pointerId);
-    setDrag({ from: m, to: m });
+    setDrag({ from: m, to: m, moved: false });
   };
   const onPointerMove = (e: React.PointerEvent) => {
-    if (drag) setDrag({ ...drag, to: minuteAt(e.clientY) });
+    if (tap.current && Math.abs(e.clientY - tap.current.y) > 8) tap.current = null;
+    if (drag) {
+      const to = minuteAt(e.clientY);
+      setDrag({ ...drag, to, moved: drag.moved || Math.abs(to - drag.from) * PX_PER_MIN > 4 });
+    }
+  };
+  const createAt = (minute: number) => {
+    const start = Math.floor(minute / 15) * 15;
+    onCreate(day, start, Math.min(MIN_PER_DAY, start + 30));
   };
   const onPointerUp = () => {
+    if (tap.current) {
+      createAt(tap.current.minute);
+      tap.current = null;
+      return;
+    }
     if (!drag) return;
-    const r = dragRange(drag.from, drag.to);
     setDrag(null);
     // A plain click (no real drag) gives a 30 min block.
-    const end = r.end - r.start <= 15 ? Math.min(MIN_PER_DAY, r.start + 30) : r.end;
-    onCreate(day, r.start, end);
+    if (!drag.moved) return createAt(drag.from);
+    const r = dragRange(drag.from, drag.to);
+    onCreate(day, r.start, r.end);
+  };
+  const onPointerCancel = () => {
+    tap.current = null;
+    setDrag(null);
   };
 
   const preview = drag ? dragRange(drag.from, drag.to) : null;
@@ -201,7 +219,7 @@ function DayColumn({
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}
-      onPointerCancel={() => setDrag(null)}
+      onPointerCancel={onPointerCancel}
       aria-label={`${day.toDateString()}: drag to add a schedule`}
     >
       {laid.map(({ item, top, bottom, lane, lanes, clippedStart }) => {

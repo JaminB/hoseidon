@@ -8,7 +8,7 @@ import { ScheduleSheet, type SheetState } from '../components/schedule/schedule-
 import { WeekView } from '../components/schedule/week-view';
 import { Button } from '../components/ui/button';
 import { Card } from '../components/ui/card';
-import { EmptyState, Skeleton } from '../components/ui/misc';
+import { EmptyState, ErrorBanner, Skeleton } from '../components/ui/misc';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs';
 import { addDays, startOfDay } from '../lib/calendar';
 import { useDevices, usePreview, useSchedules } from '../lib/queries';
@@ -120,6 +120,13 @@ export function SchedulePage() {
           )}
         </div>
 
+        {schedules.isError && (
+          <ErrorBanner title="Couldn't load schedules" error={schedules.error} />
+        )}
+        {preview.isError && !schedules.isError && (
+          <ErrorBanner title="Couldn't load the week" error={preview.error} />
+        )}
+
         <TabsContent value="week" className="outline-none">
           <WeekView
             days={days}
@@ -135,7 +142,7 @@ export function SchedulePage() {
         </TabsContent>
 
         <TabsContent value="list" className="outline-none">
-          {schedules.isPending ? (
+          {schedules.isError ? null : schedules.isPending ? (
             <Card className="space-y-4 p-5">
               {[0, 1, 2].map((i) => (
                 <Skeleton key={i} className="h-14" />

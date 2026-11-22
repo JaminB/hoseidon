@@ -68,14 +68,40 @@ export const useLinkTapStatus = () =>
 
 // ---- device commands (optimistic) ---------------------------------------------------------------
 
-/** Applies `fn` to one device inside the cached gateway tree; returns a rollback. */
-function patchDeviceCache(qc: QueryClient, id: string, fn: (d: Device) => Device) {
-  const prev = qc.getQueryData<GatewayWithDevices[]>(keys.gateways);
+const mapDevice = (qc: QueryClient, id: string, fn: (d: Device) => Device) =>
   qc.setQueryData<GatewayWithDevices[]>(keys.gateways, (gws) =>
     gws?.map((g) => ({ ...g, devices: g.devices.map((d) => (d.id === id ? fn(d) : d)) })),
   );
-  return () => qc.setQueryData(keys.gateways, prev);
+
+/**
+ * Applies `fn` to one device inside the cached gateway tree. The rollback restores only that
+ * device, so other in-flight optimistic changes survive.
+ */
+function patchDeviceCache(qc: QueryClient, id: string, fn: (d: Device) => Device) {
+  const prev = qc
+    .getQueryData<GatewayWithDevices[]>(keys.gateways)
+    ?.flatMap((g) => g.devices)
+    .find((d) => d.id === id);
+  mapDevice(qc, id, fn);
+  return () => {
+    if (prev) mapDevice(qc, id, () => prev);
+  };
 }
+
+/** Same idea for the schedule list: restore just the one schedule (re-adding it if removed). */
+function scheduleRollback(qc: QueryClient, id: number) {
+  const prev = qc.getQueryData<Schedule[]>(keys.schedules)?.find((s) => s.id === id);
+  return () =>
+    qc.setQueryData<Schedule[]>(keys.schedules, (list) => {
+      if (!list || !prev) return list;
+      return list.some((s) => s.id === id)
+        ? list.map((s) => (s.id === id ? prev : s))
+        : [...list, prev].sort((a, b) => a.name.localeCompare(b.name));
+    });
+}
+
+/** Schedule writes run one after another, so two quick edits can't land out of order. */
+const scheduleScope = { id: 'schedules' };
 
 function afterCommand(qc: QueryClient) {
   void qc.invalidateQueries({ queryKey: keys.gateways });
@@ -190,7 +216,7 @@ export function usePatchGateway() {
       api.patchGateway(id, patch),
     onMutate: async ({ id, patch }) => {
       await qc.cancelQueries({ queryKey: keys.gateways });
-      const prev = qc.getQueryData<GatewayWithDevices[]>(keys.gateways);
+      const prev = qc.getQueryData<GatewayWithDevices[]>(keys.gateways)?.find((g) => g.id === id);
       qc.setQueryData<GatewayWithDevices[]>(keys.gateways, (gws) =>
         gws?.map((g) =>
           g.id === id
@@ -202,7 +228,11 @@ export function usePatchGateway() {
             : g,
         ),
       );
-      return { rollback: () => qc.setQueryData(keys.gateways, prev) };
+      const rollback = () =>
+        qc.setQueryData<GatewayWithDevices[]>(keys.gateways, (gws) =>
+          gws?.map((g) => (g.id === id && prev ? { ...prev, devices: g.devices } : g)),
+        );
+      return { rollback };
     },
     onError: (err, _v, ctx) => {
       ctx?.rollback();
@@ -224,6 +254,7 @@ export function useCreateSchedule() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (input: ScheduleInput) => api.createSchedule(input),
+    scope: scheduleScope,
     onSuccess: (s) =>
       toast.success(`Scheduled “${s.name}”`, s.nextAt ? undefined : 'No upcoming runs.'),
     onError: (err) => toast.error("Couldn't create the schedule", errorMessage(err)),
@@ -236,13 +267,14 @@ export function usePatchSchedule() {
   return useMutation({
     mutationFn: ({ id, patch }: { id: number; patch: SchedulePatch }) =>
       api.patchSchedule(id, patch),
+    scope: scheduleScope,
     onMutate: async ({ id, patch }) => {
       await qc.cancelQueries({ queryKey: keys.schedules });
-      const prev = qc.getQueryData<Schedule[]>(keys.schedules);
+      const rollback = scheduleRollback(qc, id);
       qc.setQueryData<Schedule[]>(keys.schedules, (list) =>
         list?.map((s) => (s.id === id ? ({ ...s, ...patch } as Schedule) : s)),
       );
-      return { rollback: () => qc.setQueryData(keys.schedules, prev) };
+      return { rollback };
     },
     onError: (err, _v, ctx) => {
       ctx?.rollback();
@@ -256,11 +288,12 @@ export function useDeleteSchedule() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (s: Schedule) => api.deleteSchedule(s.id),
+    scope: scheduleScope,
     onMutate: async (s) => {
       await qc.cancelQueries({ queryKey: keys.schedules });
-      const prev = qc.getQueryData<Schedule[]>(keys.schedules);
+      const rollback = scheduleRollback(qc, s.id);
       qc.setQueryData<Schedule[]>(keys.schedules, (list) => list?.filter((x) => x.id !== s.id));
-      return { rollback: () => qc.setQueryData(keys.schedules, prev) };
+      return { rollback };
     },
     onSuccess: (_r, s) => toast(`Deleted “${s.name}”`),
     onError: (err, _s, ctx) => {

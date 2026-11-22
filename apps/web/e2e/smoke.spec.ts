@@ -151,6 +151,8 @@ test.describe('interactions', () => {
 
   test('drag on the week view opens a prefilled schedule sheet', async ({ page }) => {
     await page.goto('/schedule');
+    // Wait for the seeded blocks, then drag at 9:00-10:30, which no seeded schedule uses.
+    await expect(page.getByRole('button', { name: /Garden drip/ }).first()).toBeVisible();
     const column = page.getByLabel(/drag to add a schedule/).nth(3);
     const box = (await column.boundingBox())!;
     // 9:00-10:30, inside the scrolled-into-view part of the grid.

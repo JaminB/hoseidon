@@ -477,7 +477,6 @@ function Stepper({
         value={value}
         min={min}
         max={max}
-        step={step}
         aria-label={label}
         onChange={(e) => {
           const n = Number(e.target.value);

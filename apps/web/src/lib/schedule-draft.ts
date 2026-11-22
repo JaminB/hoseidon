@@ -98,7 +98,8 @@ export interface Template {
   id: string;
   name: string;
   blurb: string;
-  draft: Partial<ScheduleDraft> & { minutes: number };
+  /** Wall time [h, m]; the date is picked when the template is used (tomorrow). */
+  draft: Partial<ScheduleDraft> & { minutes: number; at: [number, number] };
 }
 
 const tomorrowAt = (h: number, m = 0) => {
@@ -117,7 +118,7 @@ export const TEMPLATES: Template[] = [
       name: 'Lawn',
       color: '#40c057',
       rrule: 'FREQ=DAILY;INTERVAL=2',
-      dtstart: tomorrowAt(6),
+      at: [6, 0],
       minutes: 20,
       skipRules: { ...DEFAULT_SKIP_RULES, rainForecastMm: 5, freezeC: 2 },
     },
@@ -130,7 +131,7 @@ export const TEMPLATES: Template[] = [
       name: 'Garden drip',
       color: '#22b8cf',
       rrule: 'FREQ=DAILY',
-      dtstart: tomorrowAt(7),
+      at: [7, 0],
       minutes: 30,
       skipRules: { ...DEFAULT_SKIP_RULES, rainForecastMm: 10 },
     },
@@ -143,7 +144,7 @@ export const TEMPLATES: Template[] = [
       name: 'Deep soak',
       color: '#4c6ef5',
       rrule: 'FREQ=WEEKLY;BYDAY=MO,WE,FR',
-      dtstart: tomorrowAt(5, 30),
+      at: [5, 30],
       minutes: 30,
       cycleSoak: { cycles: 3, soakMinutes: 20 },
     },
@@ -156,7 +157,7 @@ export const TEMPLATES: Template[] = [
       name: 'Smart lawn',
       color: '#7950f2',
       rrule: 'FREQ=DAILY',
-      dtstart: tomorrowAt(5),
+      at: [5, 0],
       minutes: 15,
       skipRules: {
         ...DEFAULT_SKIP_RULES,
@@ -170,6 +171,6 @@ export const TEMPLATES: Template[] = [
 ];
 
 export function draftFromTemplate(t: Template): ScheduleDraft {
-  const { minutes, ...rest } = t.draft;
-  return blankDraft({ ...rest, zoneSeconds: minutes * 60 });
+  const { minutes, at, ...rest } = t.draft;
+  return blankDraft({ ...rest, dtstart: tomorrowAt(...at), zoneSeconds: minutes * 60 });
 }

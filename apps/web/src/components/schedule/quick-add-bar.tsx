@@ -40,9 +40,12 @@ export function QuickAddBar({ onEdit }: { onEdit: (draft: ScheduleDraft) => void
 
   const submit = useMutation({
     mutationFn: (t: string) => api.quickAdd(t),
-    onSuccess: (res) => {
+    onSuccess: (res, submitted) => {
       if (!res.ok) return toast.error("That didn't quite parse", res.errors[0]);
-      create.mutate(res.draft, { onSuccess: () => setText('') });
+      // Clear only if the user hasn't started typing the next one meanwhile.
+      create.mutate(res.draft, {
+        onSuccess: () => setText((cur) => (cur.trim() === submitted ? '' : cur)),
+      });
     },
     onError: (err) => toast.error('Quick add failed', err.message),
   });

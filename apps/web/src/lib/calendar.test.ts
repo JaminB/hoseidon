@@ -65,6 +65,12 @@ describe('layoutDay', () => {
     expect(lanes).toEqual({ a: [0, 2], b: [1, 2], c: [0, 2], d: [0, 1] });
   });
 
+  it('places blocks on the wall-clock grid on DST days', () => {
+    const springForward = at('2026-03-08T00:00');
+    const out = layoutDay([block('a', '2026-03-08T06:00', '2026-03-08T06:30')], springForward);
+    expect(out[0]).toMatchObject({ top: 360, bottom: 390 });
+  });
+
   it('clips blocks that cross midnight', () => {
     const out = layoutDay([block('a', '2026-11-20T23:30', '2026-11-21T00:30')], day);
     expect(out[0]).toMatchObject({ top: 0, bottom: 30, clippedStart: true, clippedEnd: false });
@@ -80,6 +86,10 @@ describe('describeRrule', () => {
     ['FREQ=WEEKLY;BYDAY=MO,WE,FR', 'Mon, Wed, Fri'],
     ['FREQ=WEEKLY;INTERVAL=2;BYDAY=SA', 'Sat · every other week'],
     ['FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR,SA,SU', 'Every day'],
+    [
+      'FREQ=WEEKLY;INTERVAL=2;BYDAY=MO,TU,WE,TH,FR,SA,SU',
+      'Mon, Tue, Wed, Thu, Fri, Sat, Sun · every other week',
+    ],
     ['FREQ=YEARLY', 'FREQ=YEARLY'],
   ])('%s -> %s', (rule, text) => {
     expect(describeRrule(rule)).toBe(text);

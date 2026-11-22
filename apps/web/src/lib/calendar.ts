@@ -102,11 +102,14 @@ export function layoutDay<T extends Interval>(items: T[], day: Date): DayBlock<T
     .map((item) => {
       const s = Math.max(item.start.getTime(), dayStart);
       const e = Math.min(item.end.getTime(), dayEnd);
+      // Wall-clock minutes, so blocks line up with the hour grid on DST days too.
+      const top = s === dayStart ? 0 : minuteOfDay(new Date(s));
+      const end = e === dayEnd ? MIN_PER_DAY : minuteOfDay(new Date(e));
       return {
         item,
-        top: (s - dayStart) / 60_000,
+        top,
         // Keep zero-length blocks visible.
-        bottom: Math.max((e - dayStart) / 60_000, (s - dayStart) / 60_000 + 1),
+        bottom: Math.max(end, top + 1),
         lane: 0,
         lanes: 1,
         clippedStart: item.start.getTime() < dayStart,
@@ -154,7 +157,7 @@ export function describeRrule(rrule: string): string {
       if (interval === 2) return 'Every other day';
       return `Every ${interval} days`;
     case 'WEEKLY': {
-      if (days.length === 7) return 'Every day';
+      if (days.length === 7 && interval === 1) return 'Every day';
       const on = days.length ? days.join(', ') : 'Weekly';
       if (interval === 1) return days.length ? on : 'Every week';
       return `${on} · every ${interval === 2 ? 'other' : `${interval}`} week${interval === 2 ? '' : 's'}`;

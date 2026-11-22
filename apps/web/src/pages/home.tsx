@@ -18,7 +18,7 @@ import { Badge } from '../components/ui/badge';
 import { Button } from '../components/ui/button';
 import { Card, SectionLabel } from '../components/ui/card';
 import { CountdownRing } from '../components/ui/indicators';
-import { EmptyState, Skeleton, Stat } from '../components/ui/misc';
+import { EmptyState, ErrorBanner, Skeleton, Stat } from '../components/ui/misc';
 import { addDays, startOfDay } from '../lib/calendar';
 import { cn } from '../lib/cn';
 import { formatDuration, formatRelative, formatTime, greeting } from '../lib/format';
@@ -57,7 +57,8 @@ export function HomePage() {
 
   const running = devices.filter((d) => d.watering);
   const runs = planned.data ?? [];
-  const next = runs.find((r) => r.status === 'planned' && Date.parse(r.plannedAt) >= now - 60_000);
+  // Planned runs are sorted; a late one (waiting behind another zone) is still the next run.
+  const next = runs.find((r) => r.status === 'planned');
   const doneSec = runs.filter((r) => r.status === 'done').reduce((s, r) => s + r.seconds, 0);
   const attention = devices.filter(
     (d) => d.alarms.length || !d.online || (d.batteryPct ?? 100) < 20,
@@ -66,6 +67,9 @@ export function HomePage() {
   return (
     <Page>
       <PageHeader title={greeting(new Date(now))} description={dateFmt.format(now)} />
+
+      {gateways.isError && <ErrorBanner title="Couldn't load devices" error={gateways.error} />}
+      {planned.isError && <ErrorBanner title="Couldn't load today's runs" error={planned.error} />}
 
       <Card className="mb-6 grid grid-cols-2 gap-x-4 gap-y-5 px-5 py-4 md:grid-cols-4 md:px-6 md:py-5">
         <Stat
@@ -120,6 +124,8 @@ export function HomePage() {
             <Card>
               {planned.isPending ? (
                 <TimelineSkeleton />
+              ) : planned.isError ? (
+                <EmptyState icon={CircleAlert} title="Today's runs are unavailable" />
               ) : runs.length === 0 ? (
                 <EmptyState
                   icon={CalendarPlus}

@@ -1,7 +1,7 @@
 import type { Gateway } from '@hoseidon/shared';
 import { useQuery } from '@tanstack/react-query';
 import { LoaderCircle, LocateFixed, MapPin, Search } from 'lucide-react';
-import { useDeferredValue, useState } from 'react';
+import { useDeferredValue, useEffect, useRef, useState } from 'react';
 import { geocode, type GeocodeResult } from '../../lib/api';
 import { cn } from '../../lib/cn';
 import { usePatchGateway } from '../../lib/queries';
@@ -77,6 +77,13 @@ function NameForm({ gateway }: { gateway: Gateway }) {
 function LocationForm({ gateway, onDone }: { gateway: Gateway; onDone: () => void }) {
   const [query, setQuery] = useState('');
   const [locating, setLocating] = useState(false);
+  const mounted = useRef(true);
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
   const deferred = useDeferredValue(query.trim());
   const patch = usePatchGateway();
 
@@ -100,10 +107,12 @@ function LocationForm({ gateway, onDone }: { gateway: Gateway; onDone: () => voi
     setLocating(true);
     navigator.geolocation.getCurrentPosition(
       (pos) => {
+        if (!mounted.current) return; // The sheet closed while we waited.
         setLocating(false);
         save(pos.coords.latitude, pos.coords.longitude, browserZone(), 'your current location');
       },
       (err) => {
+        if (!mounted.current) return;
         setLocating(false);
         toast.error("Couldn't get your location", err.message);
       },
