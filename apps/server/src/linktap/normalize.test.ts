@@ -84,6 +84,8 @@ describe('normalizeWatering', () => {
 
   it('returns null when not watering', () => {
     expect(normalizeWatering(null)).toBeNull();
+    expect(normalizeWatering({})).toBeNull();
+    expect(normalizeWatering({ dur: 60, vel: 0 })).toBeNull();
   });
 });
 
@@ -315,6 +317,34 @@ describe('live API fixtures (sanitized captures from 2026-11-22)', () => {
   it('treats an idle getWateringStatus (status: null) as not watering', () => {
     const res = getWateringStatusSchema.parse(fixture('getWateringStatus'));
     expect(normalizeWatering(res.status)).toBeNull();
+  });
+
+  it('normalizes a running getWateringStatus (string values, remaining from onStamp + dur)', () => {
+    const res = getWateringStatusSchema.parse(fixture('getWateringStatus.running'));
+    const onStamp = 1795000000000;
+    // 12 s into a 60 s run.
+    expect(normalizeWatering(res.status, onStamp + 12_000)).toEqual({
+      remainingSec: 48,
+      totalSec: 60,
+      flowMlPerMin: 8509,
+      // vol stays "0" for the whole run on the live API: unknown, not zero.
+      volumeMl: null,
+    });
+    // onDuration doesn't count down; the clock does. Clamped at both ends.
+    expect(normalizeWatering(res.status, onStamp + 90_000)?.remainingSec).toBe(0);
+    expect(normalizeWatering(res.status, onStamp - 5_000)?.remainingSec).toBe(60);
+  });
+
+  it('treats the post-run {"dur":"60"} status as idle', () => {
+    const res = getWateringStatusSchema.parse(fixture('getWateringStatus.finished'));
+    expect(res.status).toEqual({ dur: '60' });
+    expect(normalizeWatering(res.status)).toBeNull();
+  });
+
+  it('falls back to total minutes + totalSec when dur is missing', () => {
+    expect(
+      normalizeWatering({ onStamp: '1000', total: '2', totalSec: '30' }, 1000 + 30_000),
+    ).toMatchObject({ totalSec: 150, remainingSec: 120 });
   });
 
   it('normalizes the live history (records under `status`)', () => {

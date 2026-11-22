@@ -158,19 +158,28 @@ for (const vp of VIEWPORTS) {
 test.describe('interactions', () => {
   test.use({ viewport: { width: 1440, height: 900 } });
 
-  test('drag on the week view opens a prefilled schedule sheet', async ({ page }) => {
+  test('drag on the week view opens a prefilled schedule sheet', async ({ page, request }) => {
+    // "Evening refresh" is seeded 40 min after the run starts, so its block can land anywhere.
+    // Drag at 9:00-10:30 (no other seeded schedule uses it), or at 1:00-2:30 when it is there.
+    const all = (await (await request.get('/api/schedules')).json()) as {
+      name: string;
+      dtstart: string;
+    }[];
+    const evening = all.find((s) => s.name === 'Evening refresh')?.dtstart.slice(11, 16) ?? '';
+    const [eh = 0, em = 0] = evening.split(':').map(Number);
+    const eveningH = eh + em / 60;
+    const fromH = eveningH > 8.5 && eveningH < 10.75 ? 1 : 9;
     await page.goto('/schedule');
-    // Wait for the seeded blocks, then drag at 9:00-10:30, which no seeded schedule uses.
     await expect(page.getByRole('button', { name: /Garden drip/ }).first()).toBeVisible();
-    // The grid fits itself to the blocks, which depend on the time of day (one is seeded 40 min
-    // from now). Open the full day so 9:00 is always at a fixed offset from the top.
+    // The grid fits itself to the blocks, which depend on the time of day. Open the full day so
+    // the drag hours are always at a fixed offset from the top.
     await page.getByRole('button', { name: 'Show full day' }).click();
     const column = page.getByLabel(/drag to add a schedule/).nth(3);
     const box = (await column.boundingBox())!;
-    // 9:00-10:30, inside the scrolled-into-view part of the grid.
-    await page.mouse.move(box.x + box.width / 2, box.y + 9 * 48 + 2);
+    // 90 minutes, inside the scrolled-into-view part of the grid.
+    await page.mouse.move(box.x + box.width / 2, box.y + fromH * 48 + 2);
     await page.mouse.down();
-    await page.mouse.move(box.x + box.width / 2, box.y + 10.5 * 48 - 4, { steps: 6 });
+    await page.mouse.move(box.x + box.width / 2, box.y + (fromH + 1.5) * 48 - 4, { steps: 6 });
     await page.mouse.up();
     const sheet = page.getByRole('dialog', { name: 'New schedule' });
     await expect(sheet).toBeVisible();

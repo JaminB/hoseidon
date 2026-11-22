@@ -560,13 +560,17 @@ export class SchedulerEngine {
     const stopped = () => (this.stoppedAt.get(device.id) ?? 0) > seenStops;
     let attempts = 0;
     try {
-      attempts = await startVerified(executor, ref, row.seconds, (n) => (attempts = n), stopped);
+      const started = await startVerified(executor, ref, row.seconds, {
+        onAttempt: (n) => (attempts = n),
+        shouldAbort: stopped,
+      });
+      attempts = started.attempts;
       if (stopped()) {
         // Stop landed during the verify window; its command queued behind our start, so the
         // zone is already off. Don't record a run.
         throw new StartAbortedError();
       }
-      const startedAt = new Date();
+      const { startedAt } = started;
       db.transaction((tx) => {
         const run = recordStart(tx, {
           deviceId: device.id,
@@ -574,8 +578,28 @@ export class SchedulerEngine {
           now: startedAt,
           scheduleId: s.id,
         });
-        update(tx, row.id, { runId: run.id, startedAt, attempts }, startedAt);
+        update(tx, row.id, { runId: run.id, startedAt, attempts }, new Date());
+        if (!started.verified) {
+          // Accepted but unconfirmed: track it as running (it probably is; the poller and
+          // history will settle it) and tell the user, rather than risk a second start.
+          insertEvents(tx, [
+            {
+              at: new Date(),
+              type: 'schedule.run_unverified',
+              source: 'hoseidon',
+              severity: 'warn',
+              gatewayId: device.gatewayId,
+              deviceId: device.id,
+              title: `${s.name}: couldn't confirm ${displayName(device)} started`,
+              message: started.note ?? null,
+              data: { scheduleId: s.id, plannedRunId: row.id, runId: run.id },
+            },
+          ]);
+        }
       });
+      if (!started.verified) {
+        this.o.log?.(`scheduler: ${s.name} / ${device.id}: start unverified (${started.note})`);
+      }
     } catch (err) {
       if (err instanceof StartAbortedError) {
         this.o.db.transaction((tx) =>

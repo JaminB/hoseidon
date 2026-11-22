@@ -6,6 +6,7 @@ import { settingsLastCallStore } from './db/kv';
 import { linktapFromConfig } from './linktap';
 import { mockGeocodeFetch } from './linktap/location';
 import { Poller } from './poller';
+import { gatewayTimeZone, hasStartEvidence } from './poller/ingest';
 import { SchedulerEngine } from './schedule/engine';
 import { CloudExecutor } from './schedule/executor';
 import { resolveTimeZone } from './api/settings';
@@ -44,7 +45,12 @@ const poller = new Poller({
   log,
   fetch: config.LINKTAP_MOCK ? mockGeocodeFetch : undefined,
 });
-const executor = new CloudExecutor({ client: linktap });
+const executor = new CloudExecutor({
+  client: linktap,
+  // Before calling a start failed, look at what the poller/webhooks already saw, then history.
+  evidence: (d, since) => hasStartEvidence(db, d.id, since),
+  historyTimeZone: (d) => gatewayTimeZone(db, d.gatewayId, timeZone),
+});
 // Offline demo: the mock serves Open-Meteo-shaped weather so the real cache code runs too.
 const weather = new OpenMeteoProvider({
   db,

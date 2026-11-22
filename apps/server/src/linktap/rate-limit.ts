@@ -1,10 +1,12 @@
 /**
  * Per-bucket rate limiter for the LinkTap cloud API.
  *
- * - Calls in the same bucket run one at a time, at least `intervalMs` apart (measured from the end
- *   of the previous call, which is the conservative reading of LinkTap's limits).
+ * - Calls in the same bucket lane run one at a time, at least `intervalMs` apart (measured from
+ *   the end of the previous call, which is the conservative reading of LinkTap's limits).
  * - Calls with the same coalesce key that are already queued or in flight share one promise, so
  *   five components asking for getAllDevices at once cost one API call.
+ * - A `priority` call goes ahead of every queued non-priority call in its lane (used for the
+ *   scheduler's start check, so background polling can't starve it).
  * - A failed call still consumes its slot: LinkTap counts it too.
  */
 
@@ -12,15 +14,33 @@ export interface BucketSpec {
   intervalMs: number;
 }
 
-interface Bucket {
+export interface ScheduleOptions {
+  /** Splits a bucket into independent lanes (e.g. per device). */
+  scope?: string;
+  /** Identical queued/in-flight calls with this key share one result. */
+  coalesceKey?: string;
+  /** Jump ahead of queued non-priority calls in this lane. */
+  priority?: boolean;
+}
+
+interface Job {
+  priority: boolean;
+  coalesceKey?: string;
+  run: () => Promise<unknown>;
+  resolve: (value: unknown) => void;
+  reject: (err: unknown) => void;
+}
+
+interface Lane {
   spec: BucketSpec;
   /** Time the last call finished (ms epoch), or -Infinity if none yet. */
   lastDoneAt: number;
-  /** Tail of the serialized queue. */
-  tail: Promise<void>;
+  queue: Job[];
+  /** Queued + in flight. */
   pending: number;
+  draining: boolean;
   /** In-flight or queued calls keyed for coalescing. */
-  inflight: Map<string, Promise<unknown>>;
+  inflight: Map<string, { promise: Promise<unknown>; job: Job }>;
 }
 
 /** Remembers when each lane last finished a call, so limits survive a restart. */
@@ -30,7 +50,7 @@ export interface LastCallStore {
 }
 
 export class RateLimiter<B extends string = string> {
-  private readonly buckets = new Map<string, Bucket>();
+  private readonly lanes = new Map<string, Lane>();
 
   constructor(
     private readonly specs: Record<B, BucketSpec>,
@@ -38,72 +58,127 @@ export class RateLimiter<B extends string = string> {
     private readonly store?: LastCallStore,
   ) {}
 
-  /**
-   * Queue `fn` in `bucket`. `scope` splits a bucket into independent lanes (e.g. per device).
-   * When `coalesceKey` is given, identical queued/in-flight calls share one result.
-   */
-  schedule<T>(
-    bucket: B,
-    fn: () => Promise<T>,
-    opts: { scope?: string; coalesceKey?: string } = {},
-  ): Promise<T> {
-    const b = this.bucket(bucket, opts.scope);
+  /** Queue `fn` in `bucket` (see ScheduleOptions). */
+  schedule<T>(bucket: B, fn: () => Promise<T>, opts: ScheduleOptions = {}): Promise<T> {
+    const lane = this.lane(bucket, opts.scope);
     if (opts.coalesceKey !== undefined) {
-      const existing = b.inflight.get(opts.coalesceKey);
-      if (existing) return existing as Promise<T>;
+      const existing = lane.inflight.get(opts.coalesceKey);
+      if (existing) {
+        if (opts.priority) this.promote(lane, existing.job);
+        return existing.promise as Promise<T>;
+      }
     }
 
-    b.pending++;
-    const run = b.tail.then(async () => {
-      const wait = b.lastDoneAt + b.spec.intervalMs - this.now();
-      if (wait > 0) await new Promise((r) => setTimeout(r, wait));
-      try {
-        return await fn();
-      } finally {
-        b.lastDoneAt = this.now();
-        this.store?.set(key(bucket, opts.scope), b.lastDoneAt);
-        b.pending--;
-        if (opts.coalesceKey !== undefined) b.inflight.delete(opts.coalesceKey);
-      }
+    let job!: Job;
+    const promise = new Promise<T>((resolve, reject) => {
+      job = {
+        priority: opts.priority ?? false,
+        coalesceKey: opts.coalesceKey,
+        run: fn,
+        resolve: resolve as (value: unknown) => void,
+        reject,
+      };
     });
-    // Keep the chain alive regardless of this call's outcome.
-    b.tail = run.then(
-      () => undefined,
-      () => undefined,
-    );
-    if (opts.coalesceKey !== undefined) b.inflight.set(opts.coalesceKey, run);
-    return run;
+    lane.pending++;
+    this.enqueue(lane, job);
+    if (opts.coalesceKey !== undefined) lane.inflight.set(opts.coalesceKey, { promise, job });
+    void this.drain(lane, key(bucket, opts.scope));
+    return promise;
   }
 
   /**
-   * Earliest time a newly scheduled call in this bucket could start. Accounts for calls already
+   * Earliest time a newly scheduled call in this lane could start. Accounts for calls already
    * queued (each needs its own interval), so it's an estimate when calls are in flight.
    */
   nextAvailableAt(bucket: B, scope?: string): Date {
-    const b = this.bucket(bucket, scope);
-    const base = Math.max(this.now(), b.lastDoneAt + b.spec.intervalMs);
-    return new Date(base + b.pending * b.spec.intervalMs);
+    const lane = this.lane(bucket, scope);
+    const base = Math.max(this.now(), lane.lastDoneAt + lane.spec.intervalMs);
+    return new Date(base + lane.pending * lane.spec.intervalMs);
+  }
+
+  /** Earliest nextAvailableAt over every scoped lane of `bucket` seen so far (now if none). */
+  earliestAvailableAt(bucket: B): Date {
+    let best: number | null = null;
+    for (const k of this.lanes.keys()) {
+      if (!k.startsWith(`${bucket}:`)) continue;
+      const t = this.nextAvailableAt(bucket, k.slice(bucket.length + 1)).getTime();
+      best = best === null ? t : Math.min(best, t);
+    }
+    return new Date(best ?? this.now());
   }
 
   /** Number of calls queued or in flight for this bucket lane. */
   pendingCount(bucket: B, scope?: string): number {
-    return this.buckets.get(key(bucket, scope))?.pending ?? 0;
+    return this.lanes.get(key(bucket, scope))?.pending ?? 0;
   }
 
-  private bucket(name: B, scope?: string): Bucket {
+  private enqueue(lane: Lane, job: Job) {
+    if (!job.priority) {
+      lane.queue.push(job);
+      return;
+    }
+    // After the priority jobs already waiting, before everything else.
+    const at = lane.queue.findIndex((j) => !j.priority);
+    if (at === -1) lane.queue.push(job);
+    else lane.queue.splice(at, 0, job);
+  }
+
+  private promote(lane: Lane, job: Job) {
+    const i = lane.queue.indexOf(job);
+    if (i === -1 || job.priority) return; // already running, or already priority
+    lane.queue.splice(i, 1);
+    job.priority = true;
+    this.enqueue(lane, job);
+  }
+
+  private async drain(lane: Lane, laneKey: string) {
+    if (lane.draining) return;
+    lane.draining = true;
+    // Let the caller's synchronous code (e.g. queueing more calls) finish first.
+    await Promise.resolve();
+    try {
+      while (lane.queue.length) {
+        const wait = lane.lastDoneAt + lane.spec.intervalMs - this.now();
+        if (wait > 0) await new Promise((r) => setTimeout(r, wait));
+        // Pick after waiting, so a priority call that arrived meanwhile goes first.
+        const job = lane.queue.shift();
+        if (!job) break;
+        let ok = true;
+        let value: unknown;
+        try {
+          value = await job.run();
+        } catch (err) {
+          ok = false;
+          value = err;
+        }
+        // Book-keep before the caller sees the result, so it observes the updated lane.
+        lane.lastDoneAt = this.now();
+        this.store?.set(laneKey, lane.lastDoneAt);
+        lane.pending--;
+        if (job.coalesceKey !== undefined) lane.inflight.delete(job.coalesceKey);
+        if (ok) job.resolve(value);
+        else job.reject(value);
+      }
+    } finally {
+      lane.draining = false;
+    }
+  }
+
+  private lane(name: B, scope?: string): Lane {
     const k = key(name, scope);
-    let b = this.buckets.get(k);
-    if (!b) {
-      b = {
+    let lane = this.lanes.get(k);
+    if (!lane) {
+      lane = {
         spec: this.specs[name],
         lastDoneAt: this.store?.get(k) ?? Number.NEGATIVE_INFINITY,
-        tail: Promise.resolve(),
+        queue: [],
         pending: 0,
+        draining: false,
         inflight: new Map(),
       };
-      this.buckets.set(k, b);
+      this.lanes.set(k, lane);
     }
-    return b;
+    return lane;
   }
 }
 

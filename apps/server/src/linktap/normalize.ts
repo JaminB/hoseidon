@@ -76,23 +76,61 @@ export function isConnected(status: string | null | undefined): boolean {
 }
 
 /**
- * Watering durations (`remaining`, `total`, `onDuration`) are reported in minutes as far as the
- * community integrations show. STILL UNVERIFIED for a running outlet (the 2026-11-22 capture was
- * idle, so `watering` was null); confirm during a live run and change here.
+ * `remaining`, `total` and `onDuration` are whole MINUTES, with `onDurSec`/`totalSec` as the
+ * seconds part. Verified live (2026-11-22): a 1-minute run reported onDuration "1", onDurSec "0",
+ * total "1", totalSec "0" and dur "60" (seconds). `onDuration` did not count down during the run,
+ * so the remaining time is worked out from `onStamp` + `dur` instead.
  */
 export const WATERING_TIME_UNIT_SEC = 60;
 
-export function normalizeWatering(raw: RawWatering | null | undefined): Watering | null {
-  if (!raw) return null;
-  const toSec = (v: unknown) => {
-    const n = toNumber(v);
-    return n === null ? null : Math.round(n * WATERING_TIME_UNIT_SEC);
-  };
+/**
+ * Whether a status object describes a live run. After a run ends getWateringStatus keeps
+ * answering `{ dur: "60" }`, which is idle: only run fields (onStamp, onDuration, remaining,
+ * total) mean watering.
+ */
+export function isWateringStatus(raw: RawWatering | null | undefined): raw is RawWatering {
+  if (!raw) return false;
+  return [raw.onStamp, raw.onDuration, raw.remaining, raw.total].some((v) => toNumber(v) !== null);
+}
+
+function minutesAndSeconds(min: unknown, sec: unknown): number | null {
+  const m = toNumber(min);
+  if (m === null) return null;
+  return Math.round(m * WATERING_TIME_UNIT_SEC + (toNumber(sec) ?? 0));
+}
+
+/**
+ * A watering report (getWateringStatus `status`, or getAllDevices `watering`) in seconds.
+ * - total = `dur` (seconds), else total min + totalSec.
+ * - remaining = onStamp + total - now, clamped to [0, total]; without onStamp, the old
+ *   `remaining`/`onDuration` minutes.
+ * - The live status sends `vol: "0"` throughout a run, so a zero volume alongside onStamp is
+ *   unknown (history has the real figure).
+ */
+export function normalizeWatering(
+  raw: RawWatering | null | undefined,
+  now: number = Date.now(),
+): Watering | null {
+  if (!isWateringStatus(raw)) return null;
+  const dur = toNumber(raw.dur);
+  const totalSec =
+    dur !== null && dur > 0 ? Math.round(dur) : minutesAndSeconds(raw.total, raw.totalSec);
+  const onStamp = toNumber(raw.onStamp);
+  let remainingSec: number | null;
+  if (onStamp !== null && onStamp > 0 && totalSec !== null) {
+    const left = Math.round((onStamp + totalSec * 1000 - now) / 1000);
+    remainingSec = Math.min(totalSec, Math.max(0, left));
+  } else if (raw.remaining != null) {
+    remainingSec = minutesAndSeconds(raw.remaining, null);
+  } else {
+    remainingSec = minutesAndSeconds(raw.onDuration, raw.onDurSec);
+  }
+  const vol = toNumber(raw.vol);
   return {
-    remainingSec: toSec(raw.remaining ?? raw.onDuration),
-    totalSec: toSec(raw.total),
+    remainingSec,
+    totalSec,
     flowMlPerMin: toNumber(raw.vel),
-    volumeMl: toNumber(raw.vol),
+    volumeMl: onStamp !== null && vol === 0 ? null : vol,
   };
 }
 

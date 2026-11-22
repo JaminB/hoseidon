@@ -1,7 +1,7 @@
 import { and, eq, gt, isNotNull, or } from 'drizzle-orm';
 import type { Db } from '../db';
 import { devices, gateways, runs } from '../db/schema';
-import type { LinkTapClient } from '../linktap/client';
+import { isRateLimitError, LINKTAP_LIMITS, type LinkTapClient } from '../linktap/client';
 import { resolveGatewayLocation } from '../linktap/location';
 import { ingestDevices, ingestHistory, ingestWateringStatus } from './ingest';
 
@@ -9,13 +9,19 @@ export interface PollerIntervals {
   devicesMs: number;
   statusMs: number;
   historyMs: number;
+  /** After a status poll sees a run end, fetch that outlet's history this much later. */
+  reconcileMs: number;
 }
 
-/** Matches LinkTap's limits: getAllDevices 5 min, status 30 s (while running), history 10 min. */
+/**
+ * Matches LinkTap's limits: getAllDevices 5 min, status 31 s (account-wide, while something
+ * runs), history 10 min. A finished run shows up in history about a second after it ends.
+ */
 export const DEFAULT_INTERVALS: PollerIntervals = {
   devicesMs: 5 * 60_000,
-  statusMs: 30_000,
+  statusMs: LINKTAP_LIMITS.status.intervalMs,
   historyMs: 10 * 60_000,
+  reconcileMs: 5_000,
 };
 
 type Task = 'devices' | 'status' | 'history';
@@ -47,6 +53,9 @@ export class Poller {
   /** Last history attempt per device (success or not), so one failing device can't hog the turn. */
   private readonly historyAttempts = new Map<string, number>();
   private readonly busy = new Set<Task>();
+  /** Last status poll per device, so running outlets take turns at the account-wide limit. */
+  private readonly statusPolledAt = new Map<string, number>();
+  private readonly reconcileTimers = new Set<NodeJS.Timeout>();
   private readonly last: PollerStatus['last'] = {
     devices: { at: null, error: null },
     status: { at: null, error: null },
@@ -75,6 +84,8 @@ export class Poller {
     this.timers.length = 0;
     if (this.startup) clearTimeout(this.startup);
     this.startup = undefined;
+    for (const t of this.reconcileTimers) clearTimeout(t);
+    this.reconcileTimers.clear();
   }
 
   status(): PollerStatus {
@@ -106,7 +117,13 @@ export class Poller {
     }
   }
 
-  /** getWateringStatus for each device that is (or we think is) watering. */
+  /**
+   * getWateringStatus for the devices that are (or we think are) watering. LinkTap allows one
+   * status call per 30 s for the whole account, so outlets take turns: least recently polled
+   * first, and after the first call only devices whose slot is already free (normally none, so
+   * one device per tick). The scheduler's start check jumps this queue (priority).
+   * A rate-limit rejection is not a device failure: the turn just ends and the next tick retries.
+   */
   pollRunning(): Promise<void> {
     return this.guard('status', async () => {
       const { db, client } = this.opts;
@@ -116,19 +133,72 @@ export class Poller {
         .leftJoin(runs, and(eq(runs.deviceId, devices.id), eq(runs.status, 'running')))
         .where(or(isNotNull(devices.watering), isNotNull(runs.id)))
         .all();
-      const results = await Promise.allSettled(
-        active.map(async (d) => {
+      const ids = new Set(active.map((d) => d.id));
+      for (const id of this.statusPolledAt.keys()) if (!ids.has(id)) this.statusPolledAt.delete(id);
+      const polledAt = (id: string) => this.statusPolledAt.get(id) ?? 0;
+      active.sort((a, b) => polledAt(a.id) - polledAt(b.id));
+
+      let failure: unknown;
+      for (const [i, d] of active.entries()) {
+        if (i > 0 && client.nextAvailableAt('status').getTime() > Date.now()) break;
+        this.statusPolledAt.set(d.id, Date.now());
+        try {
           const sampledAt = new Date();
           const watering = await client.getWateringStatus({
             gatewayId: d.gatewayId,
             taplinkerId: d.id,
           });
-          ingestWateringStatus(db, d.id, watering, new Date(), sampledAt);
-        }),
-      );
-      const failed = results.find((r) => r.status === 'rejected');
-      if (failed) throw failed.reason;
+          const { closed } = ingestWateringStatus(db, d.id, watering, new Date(), sampledAt);
+          if (closed) this.scheduleReconcile(d.id);
+        } catch (err) {
+          if (isRateLimitError(err)) {
+            this.opts.log?.(`poller status: rate limited, retrying next tick (${d.id})`);
+            // Let this device go first next time.
+            this.statusPolledAt.set(d.id, 0);
+            break;
+          }
+          failure ??= err;
+        }
+      }
+      if (failure !== undefined) throw failure;
     });
+  }
+
+  /** While running, fetch a finished outlet's history shortly after its run ends. */
+  private scheduleReconcile(deviceId: string) {
+    if (!this.timers.length) return;
+    const t = setTimeout(() => {
+      this.reconcileTimers.delete(t);
+      void this.reconcileHistory(deviceId).catch((err: unknown) =>
+        this.opts.log?.(`poller history ${deviceId}: ${(err as Error).message}`),
+      );
+    }, this.intervals.reconcileMs);
+    t.unref();
+    this.reconcileTimers.add(t);
+  }
+
+  /**
+   * Fetch one device's history now, if its (per-taplinker) history slot is free; otherwise leave
+   * it to the regular rotation, which puts recently finished devices first. Returns whether it
+   * fetched.
+   */
+  async reconcileHistory(deviceId: string): Promise<boolean> {
+    const { db, client } = this.opts;
+    if (client.nextAvailableAt('history', deviceId).getTime() > Date.now() + 1_000) return false;
+    const row = db
+      .select({ id: devices.id, gatewayId: devices.gatewayId, timezone: gateways.timezone })
+      .from(devices)
+      .innerJoin(gateways, eq(gateways.id, devices.gatewayId))
+      .where(eq(devices.id, deviceId))
+      .get();
+    if (!row) return false;
+    this.historyAttempts.set(row.id, Date.now());
+    const entries = await client.getWateringHistory(
+      { gatewayId: row.gatewayId, taplinkerId: row.id },
+      row.timezone ?? this.opts.timeZone,
+    );
+    ingestHistory(db, row.id, entries, new Date());
+    return true;
   }
 
   /**

@@ -28,8 +28,10 @@ constant in `apps/server/src/linktap/`.
 - CORS is `*`, but the API key must never reach the browser. Hoseidon calls LinkTap only from
   the server.
 - Success: `{"result":"ok", ...}`.
-- Failure: `{"result":"error","message":"..."}`. Rate-limit violations come back the same way, as
-  an error with a "too frequently" message.
+- Failure: `{"result":"error","message":"..."}`. Rate-limit violations come back the same way.
+  Seen live for `getWateringStatus`: `"The minimum interval of calling this API is 30 seconds."`;
+  the docs mention "too frequently". Hoseidon classifies both (and any "minimum interval"
+  message) as `LinkTapError` kind `rate_limit`.
 
 ### IDs
 
@@ -131,17 +133,17 @@ unknown keys pass through and are kept in `raw` JSON on snapshots.
 - `workMode` values are `M` (Instant/manual), `I` (Interval), `T` (7-day), `O` (Odd-even),
   `Y` (Month) and `N` (none). `D` (calendar/day) is **unverified**, and any other value is
   treated as unknown.
-- `watering.remaining` and `watering.total` are assumed to be **minutes** (**unverified**, see
-  `WATERING_TIME_UNIT_SEC`).
+- `watering.remaining` and `watering.total` are assumed to be **minutes**, like the verified
+  `getWateringStatus` fields (see `WATERING_TIME_UNIT_SEC`). The exact `watering` shape inside
+  `getAllDevices` for a running outlet is still unseen.
 - `vel` is the flow rate (ml/min) and `vol` is the volume so far (ml). Only G2 models report them.
 - Flags may arrive as booleans, `0`/`1` or `"true"`/`"false"`. Hoseidon accepts all of them.
 
 ### `getWateringStatus`
 
-`{"result":"ok","status": null | {"onDuration": n, "total": n, "vel"?: n, "vol"?: n}}`
+`{"result":"ok","status": null | {...}}`. The running shape is in the verified section below
+(all values are strings; `onDuration` is not a countdown).
 
-- `onDuration` is the time remaining and `total` is the planned length. Both are assumed to be in
-  minutes.
 - **`status: null` also comes back when the credentials are bad.** Never take a successful call
   as proof that the credentials work. Use `getAllDevices` for that.
 
@@ -234,9 +236,65 @@ below are sanitized; the shapes are exactly as received. Sanitized copies are th
 
 ### `getWateringStatus`
 
-An idle outlet returned `{"result":"ok","status":null}`, as assumed. The shape of a running
-outlet is still unseen, so `WATERING_TIME_UNIT_SEC` (minutes vs seconds for
-`remaining`/`total`/`onDuration`) stays **unverified**.
+An idle outlet that has not run returned `{"result":"ok","status":null}`, as assumed.
+
+A running outlet (first live watering test, 1-minute instant runs) returned **every value as a
+string**:
+
+```jsonc
+{
+  "result": "ok",
+  "status": {
+    "onDuration": "1", // whole minutes; did NOT count down over the 60 s run
+    "onDurSec": "0", // seconds part
+    "total": "1", // planned, whole minutes
+    "totalSec": "0", // seconds part
+    "onStamp": "1795000000000", // run start, epoch ms
+    "firstDt": "1795000000000",
+    "vel": "8509", // live flow, ml/min (read "0" 12 s in, then about 8500-11300)
+    "vol": "0", // stayed "0" for the whole run
+    "dur": "60", // planned length in SECONDS
+    "cm": "M",
+    // also: pbThrd, pcThrd, pDelay, pbCnt, pcCnt, fmc, frd, wFlag, volExp, spb, spc, pbm, pcm
+  },
+}
+```
+
+- Units are resolved: `onDuration`/`total` are minutes and `onDurSec`/`totalSec` the seconds
+  part; `dur` is seconds. `WATERING_TIME_UNIT_SEC` stays 60.
+- Hoseidon computes total = `dur` (fallback `total` x 60 + `totalSec`) and remaining =
+  `onStamp` + total - now, clamped to [0, total]. A `vol` of `"0"` next to `onStamp` is treated as
+  unknown; the real volume comes from history.
+- **After a run ends** the outlet answers `{"result":"ok","status":{"dur":"60"}}`, not `null`. A
+  status is "watering" only when it has `onStamp` (or `onDuration`/`total`/`remaining`); a bare
+  `dur` is idle (`isWateringStatus` in `normalize.ts`; fixture `getWateringStatus.finished.json`).
+- **Start latency.** An outlet answered `status: null` 12 s after an accepted start, yet history
+  shows it ran (13 s, about 1.2 L, before it was stopped). Another showed running with `vel` "0"
+  at 12 s. One null right after a start proves nothing; see "How Hoseidon uses it".
+- Rate limit: `"The minimum interval of calling this API is 30 seconds."` (see Rate limits).
+
+### `activateInstantMode` (verified)
+
+Verified bodies (ids sanitized):
+
+```jsonc
+// start -> {"result":"ok","message":"success"}
+{
+  "gatewayId": "A1B2C3D4004B1200",
+  "taplinkerId": "E5F60718004B1200_1",
+  "action": true,
+  "duration": 1,
+  "autoBack": false,
+}
+// stop -> {"result":"ok","message":"success"}; the valve stopped (history shows the 13 s run)
+{ "gatewayId": "A1B2C3D4004B1200", "taplinkerId": "E5F60718004B1200_2", "action": false, "duration": 0 }
+```
+
+- The 16-char gateway id plus the full 18-char outlet id (`..._1`) works for commands.
+- Commands for different outlets 17-18 s apart all succeeded (consistent with the 15 s limit).
+- The client sends exactly these fields; `durationSec` only when non-zero, `eco`/`ecoOn`/`ecoOff`
+  only for cycle-and-soak. Hoseidon's starts send `autoBack: true` by default (go back to the
+  LinkTap plan afterwards); only `false` has been exercised live.
 
 ### `getWateringHistory`
 
@@ -268,30 +326,51 @@ The records are under **`status`** (an array), not `history`/`data`:
 - `createdAt` is more precise but sometimes batched days after the event (11-15 entries stamped
   11-18). Hoseidon uses it only when it is within 2 minutes of the local-time conversion.
 - Entries with `D` and `S` both 0 are not runs and are dropped. `cm` is kept as the run's `mode`.
+- A finished run appears within about a second of ending, with `createdAt` at about the end time,
+  so the poller fetches that outlet's history right after it sees the run end.
+- Two different outlets fetched back to back both succeeded, so the 10-minute limit looks **per
+  taplinker**, not per account.
 
 ### Resolved and still open
 
-- Resolved: the history response key (`status`), the `fall` flag name, numeric `signal`.
-- Still unverified: watering time units for a running outlet, webhook event strings, which
-  endpoints require 16-char ids, and whether the rate limits are per account or per device.
+- Resolved: the history response key (`status`), the `fall` flag name, numeric `signal`, the
+  running `getWateringStatus` shape and its units, the post-run `{dur}` status, the start/stop
+  command bodies, the 30 s status limit and its message, and history being limited per taplinker.
+- Still unverified: whether the status limit is per account or per taplinker (see Rate limits),
+  the running `watering` shape inside `getAllDevices`, webhook event strings, which endpoints
+  require 16-char ids, whether a rejected (rate-limited) call resets LinkTap's window, and
+  `autoBack: true` on a live start.
 
 ## Rate limits
 
-| Call                                            | Minimum interval            | Hoseidon bucket         |
-| ----------------------------------------------- | --------------------------- | ----------------------- |
-| `getAllDevices`                                 | 5 min                       | `devices`, account-wide |
-| Commands (`activate*`, `pause`, `dismissAlarm`) | 15 s                        | `command`, account-wide |
-| `getWateringHistory`                            | 10 min                      | `history`, account-wide |
-| `getWateringStatus`                             | not documented; we use 15 s | `status`, per taplinker |
+| Call                                            | Minimum interval     | Hoseidon bucket                     |
+| ----------------------------------------------- | -------------------- | ----------------------------------- |
+| `getAllDevices`                                 | 5 min                | `devices`, account-wide             |
+| Commands (`activate*`, `pause`, `dismissAlarm`) | 15 s                 | `command`, account-wide             |
+| `getWateringHistory`                            | 10 min               | `history`, per taplinker            |
+| `getWateringStatus`                             | 30 s (verified live) | `status`, account-wide, spaced 31 s |
 
-The docs don't say whether these limits apply per account or per device, so Hoseidon assumes
-the stricter one (per account) everywhere except `getWateringStatus`. The limits are set in
-`LINKTAP_LIMITS` (`client.ts`). The queue (`rate-limit.ts`) handles them as follows:
+`getWateringStatus` scope: in the live test, a status call for outlet 1 failed with the 30 s
+message 18 s after outlet 1's previous call (in the same second as a successful call for outlet
+2), and outlet 2 failed 15 s after its own previous call. Later, two different outlets succeeded
+in the same second, each at least 30 s after its own last call. That pattern also fits a
+**per-taplinker** 30 s limit, but the sample is small, so Hoseidon spaces status calls
+**account-wide** at 31 s, which can never trip either reading. If more captures confirm
+per-taplinker, add `status` to `PER_TAPLINKER_BUCKETS` in `client.ts` (and `perTaplinker` in the
+mock's `MOCK_API_LIMITS`).
 
-- It runs the calls in each bucket one at a time, spaced from when the previous call finished.
+The limits are set in `LINKTAP_LIMITS` (`client.ts`). The queue (`rate-limit.ts`) handles them as
+follows:
+
+- It runs the calls in each lane one at a time, spaced from when the previous call finished.
+  Per-taplinker buckets get one lane per taplinker id.
 - Identical reads that are queued or in flight share one promise.
+- A `priority` call (the scheduler's start check) goes ahead of queued background polls.
 - A failed call still uses up its slot.
-- It exposes `nextAvailableAt(bucket)`, so the UI can show "next command in 9 s".
+- It exposes `nextAvailableAt(bucket, taplinkerId?)`, so the UI can show "next command in 9 s".
+- A rate-limit rejection is a `LinkTapError` with `kind: 'rate_limit'`: the call did not happen.
+  The poller ends its status turn and retries next tick (not a device failure); the scheduler
+  re-sends a rate-limited start after 16 s (safe, it never ran).
 
 ## Webhooks
 
@@ -378,9 +457,10 @@ local-gateway executor.
 ## Gotchas
 
 - `getWateringStatus` returns `null` even when the credentials are bad (see above).
-- Community reports say a start command can come back `ok` and still not start the valve.
-  Hoseidon's scheduler (phase 2) checks with `getWateringStatus` that the run started and retries
-  once. The poller also gives a new run 20 s before a `null` status closes it.
+- Community reports say a start command can come back `ok` and still not start the valve, and
+  live, a start that did run reported `null` 12 s later. Re-sending a start that actually ran
+  double-waters, so the scheduler is careful (see "How Hoseidon uses it"). The poller gives a new
+  run 60 s before a `null` (or `{dur}`) status closes it.
 - If a LinkTap-app plan is active (`workMode` is anything except `M` or `N`) while Hoseidon also
   waters on a schedule, the device waters twice. The UI warns about this.
 - `autoBack: true` sends the device back to its plan after an instant run, so `workMode` flips
@@ -397,9 +477,29 @@ local-gateway executor.
 | Rate-limit queue                                    | `apps/server/src/linktap/rate-limit.ts` |
 | Typed client                                        | `apps/server/src/linktap/client.ts`     |
 | In-process mock (`LINKTAP_MOCK=true`)               | `apps/server/src/linktap/mock.ts`       |
-| Poller (5 min devices, 30 s status, 10 min history) | `apps/server/src/poller/index.ts`       |
+| Poller (5 min devices, 31 s status, 10 min history) | `apps/server/src/poller/index.ts`       |
 | DB ingest, derived events, webhooks                 | `apps/server/src/poller/ingest.ts`      |
 | REST and webhook routes                             | `apps/server/src/api/`                  |
+| Start and verify (`startVerified`, `CloudExecutor`) | `apps/server/src/schedule/executor.ts`  |
+
+**Status polling.** One account-wide status call per 31 s, so running outlets take turns (least
+recently polled first, one per tick). When a poll sees a run end, the poller fetches that
+outlet's history 5 s later (if its 10-minute history slot is free) to fill in the real volume.
+
+**Starting a scheduled run** (`startVerified`):
+
+1. Send the start. A rate-limited start is re-sent after 16 s (up to twice).
+2. Wait 20 s, then check `getWateringStatus` (priority over background polls). Running: done.
+3. Otherwise wait about 30 s more and check again. Running: done.
+4. Still nothing: look for evidence that costs no waiting: a getAllDevices snapshot or webhook in
+   the DB showing it watering, or a history entry ending after the start (only if that outlet's
+   history slot is free now). Any of these: done.
+5. Re-send the start once only if both checks said "not watering", nothing else suggests it ran,
+   and less than half the planned run has passed. If a check could not be made (rate limit,
+   error), or it is too late, do not re-send: record the run as running and raise a
+   `schedule.run_unverified` event (push category "failed") instead.
+6. Two accepted starts that both check "not watering": the planned run fails
+   (`schedule.run_failed`).
 
 ## Sources
 

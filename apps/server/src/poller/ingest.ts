@@ -1,4 +1,4 @@
-import { and, desc, eq, gte, lte } from 'drizzle-orm';
+import { and, desc, eq, gte, lte, ne } from 'drizzle-orm';
 import type { AlarmFlag, EventSeverity, RunSource, RunStatus, Watering } from '@hoseidon/shared';
 import type { Db } from '../db';
 import {
@@ -20,8 +20,11 @@ export const THRESHOLDS = {
 
 /** History records within this window of a known run are the same run. */
 const RUN_MATCH_WINDOW_MS = 120_000;
-/** getWateringStatus can report null for a few seconds right after a start. */
-const START_GRACE_MS = 20_000;
+/**
+ * getWateringStatus can report null for a while right after an accepted start: live, an outlet
+ * answered null 12 s after "ok" and still ran. Don't close a run on a null this young.
+ */
+export const START_GRACE_MS = 60_000;
 
 const displayName = (row: { name: string | null; linktapName: string }) =>
   row.name ?? row.linktapName;
@@ -358,7 +361,7 @@ function syncRunWithWatering(
   watering: Watering | null,
   now: Date,
   sampledAt?: Date,
-) {
+): 'opened' | 'updated' | 'closed' | null {
   const open = openRun(tx, deviceId);
   // A stale "still watering" sample must not reopen a run that closed while it was in flight.
   const closedSinceSample =
@@ -379,17 +382,24 @@ function syncRunWithWatering(
       plannedSec: watering.totalSec,
       source: 'linktap',
     });
+    return 'opened';
   } else if (watering && open) {
     if (watering.volumeMl !== null) {
       tx.update(runs).set({ volumeMl: watering.volumeMl }).where(eq(runs.id, open.id)).run();
     }
+    return 'updated';
   } else if (!watering && open) {
-    if (now.getTime() - open.startedAt.getTime() < START_GRACE_MS) return;
+    if (now.getTime() - open.startedAt.getTime() < START_GRACE_MS) return null;
     closeRun(tx, open, now, 'completed');
+    return 'closed';
   }
+  return null;
 }
 
-/** Result of a getWateringStatus poll for one device. */
+/**
+ * Result of a getWateringStatus poll for one device. `closed` is true when this report ended the
+ * open run (the poller then fetches that outlet's history to fill in the real volume).
+ */
 export function ingestWateringStatus(
   db: Db,
   deviceId: string,
@@ -397,11 +407,53 @@ export function ingestWateringStatus(
   now: Date,
   /** When the status request was sent; guards against races with webhooks/stop commands. */
   sampledAt?: Date,
-): void {
-  db.transaction((tx) => {
+): { closed: boolean } {
+  return db.transaction((tx) => {
     tx.update(devices).set({ watering, updatedAt: now }).where(eq(devices.id, deviceId)).run();
-    syncRunWithWatering(tx, deviceId, watering, now, sampledAt);
+    return { closed: syncRunWithWatering(tx, deviceId, watering, now, sampledAt) === 'closed' };
   });
+}
+
+/** The gateway's own time zone (for reading its history), else `fallback`. */
+export function gatewayTimeZone(db: Db, gatewayId: string, fallback: string): string {
+  const row = db
+    .select({ tz: gateways.timezone })
+    .from(gateways)
+    .where(eq(gateways.id, gatewayId))
+    .get();
+  return row?.tz ?? fallback;
+}
+
+/**
+ * Evidence already in the database that `deviceId` started watering at or after `since`: a
+ * getAllDevices snapshot showing it watering, or a run LinkTap told us about (webhook, status
+ * poll, history). Used before deciding a start silently failed.
+ */
+export function hasStartEvidence(db: Db, deviceId: string, since: Date): boolean {
+  const snapshot = db
+    .select({ id: deviceSnapshots.id })
+    .from(deviceSnapshots)
+    .where(
+      and(
+        eq(deviceSnapshots.deviceId, deviceId),
+        gte(deviceSnapshots.at, since),
+        eq(deviceSnapshots.watering, true),
+      ),
+    )
+    .get();
+  if (snapshot) return true;
+  const run = db
+    .select({ id: runs.id })
+    .from(runs)
+    .where(
+      and(
+        eq(runs.deviceId, deviceId),
+        gte(runs.startedAt, new Date(since.getTime() - 5_000)),
+        ne(runs.source, 'hoseidon'),
+      ),
+    )
+    .get();
+  return run !== undefined;
 }
 
 /**

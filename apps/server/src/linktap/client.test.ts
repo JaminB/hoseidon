@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { createLinkTapClient, LinkTapError } from './client';
+import { createLinkTapClient, isRateLimitError, isRateLimitMessage, LinkTapError } from './client';
 import { LinkTapMock, MOCK_IDS } from './mock';
 
 const lawn = { gatewayId: MOCK_IDS.backyard, taplinkerId: MOCK_IDS.frontLawn };
@@ -124,6 +124,108 @@ describe('LinkTap client against the mock', () => {
     await expect(Promise.all([start, stop])).resolves.toBeDefined();
     const cmds = mock.calls.filter((c) => c.endpoint === 'activateInstantMode');
     expect(cmds[1]!.at - cmds[0]!.at).toBeGreaterThanOrEqual(15_000);
+  });
+
+  it('spaces getWateringStatus account-wide (31 s) across taplinkers', async () => {
+    vi.useFakeTimers();
+    const { client, mock } = setup({ realLimits: true });
+    const dripA = { gatewayId: MOCK_IDS.backyard, taplinkerId: MOCK_IDS.dripA };
+    const both = Promise.all([client.getWateringStatus(lawn), client.getWateringStatus(dripA)]);
+    await vi.advanceTimersByTimeAsync(31_000);
+    await both;
+    const calls = mock.calls.filter((c) => c.endpoint === 'getWateringStatus');
+    expect(calls).toHaveLength(2);
+    expect(calls[1]!.at - calls[0]!.at).toBeGreaterThanOrEqual(31_000);
+    expect(client.nextAvailableAt('status').getTime() - Date.now()).toBe(31_000);
+  });
+
+  it('limits getWateringHistory per taplinker: two outlets back to back are fine', async () => {
+    vi.useFakeTimers();
+    const { client, mock } = setup({ realLimits: true });
+    const dripB = { gatewayId: MOCK_IDS.backyard, taplinkerId: MOCK_IDS.dripB };
+    await client.getWateringHistory(lawn, 'UTC');
+    await client.getWateringHistory(dripB, 'UTC');
+    const calls = mock.calls.filter((c) => c.endpoint === 'getWateringHistory');
+    expect(calls[1]!.at - calls[0]!.at).toBeLessThan(1_000);
+    expect(client.nextAvailableAt('history', MOCK_IDS.frontLawn).getTime()).toBe(
+      calls[0]!.at + 10 * 60_000,
+    );
+    expect(client.nextAvailableAt('history', MOCK_IDS.veggies).getTime()).toBe(Date.now());
+  });
+
+  it('classifies LinkTap rate-limit messages as rate_limit errors', async () => {
+    const transport = async () => ({
+      result: 'error',
+      message: 'The minimum interval of calling this API is 30 seconds.',
+    });
+    const client = createLinkTapClient({ username: 'u', apiKey: 'k', transport });
+    const err = await client.getWateringStatus(lawn).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(LinkTapError);
+    expect(err).toMatchObject({ kind: 'rate_limit' });
+    expect(isRateLimitError(err)).toBe(true);
+    expect(isRateLimitMessage('The API is called too frequently.')).toBe(true);
+    expect(isRateLimitMessage('Gateway is offline')).toBe(false);
+  });
+
+  it('the enforcing mock rejects a second status call within 30 s for ANY taplinker', () => {
+    let t = 0;
+    const mock = new LinkTapMock({ now: () => t, seedRunning: false });
+    const body = (taplinkerId: string) => ({
+      username: 'u',
+      apiKey: 'k',
+      gatewayId: MOCK_IDS.backyard,
+      taplinkerId,
+    });
+    expect(mock.handle('getWateringStatus', body(MOCK_IDS.dripA))).toEqual({
+      result: 'ok',
+      status: null,
+    });
+    t = 1_000;
+    expect(mock.handle('getWateringStatus', body(MOCK_IDS.dripB))).toEqual({
+      result: 'error',
+      message: 'The minimum interval of calling this API is 30 seconds.',
+    });
+    t = 30_000;
+    expect(mock.handle('getWateringStatus', body(MOCK_IDS.dripB))).toMatchObject({
+      result: 'ok',
+    });
+    // History is per taplinker.
+    expect(mock.handle('getWateringHistory', body(MOCK_IDS.dripA))).toMatchObject({
+      result: 'ok',
+    });
+    expect(mock.handle('getWateringHistory', body(MOCK_IDS.dripB))).toMatchObject({
+      result: 'ok',
+    });
+  });
+
+  it('mock status: null during start latency, live string shape while running, {dur} after', () => {
+    let t = 1_000_000;
+    const mock = new LinkTapMock({ now: () => t, seedRunning: false, startLatencyMs: 15_000 });
+    const auth = { username: 'u', apiKey: 'k' };
+    const ref = { ...auth, gatewayId: MOCK_IDS.backyard, taplinkerId: MOCK_IDS.dripA };
+    expect(
+      mock.handle('activateInstantMode', { ...ref, action: true, duration: 1, autoBack: false }),
+    ).toEqual({ result: 'ok', message: 'success' });
+    t += 12_000;
+    expect(mock.handle('getWateringStatus', ref)).toEqual({ result: 'ok', status: null });
+    t += 31_000;
+    const running = mock.handle('getWateringStatus', ref) as { status: Record<string, string> };
+    expect(running.status).toMatchObject({
+      onDuration: '1',
+      onDurSec: '0',
+      total: '1',
+      totalSec: '0',
+      onStamp: String(1_000_000 + 15_000),
+      vel: '900',
+      vol: '0',
+      dur: '60',
+      cm: 'M',
+    });
+    t += 40_000; // the valve opened at +15 s, so the 60 s run ended at +75 s
+    expect(mock.handle('getWateringStatus', ref)).toEqual({
+      result: 'ok',
+      status: { dur: '60' },
+    });
   });
 
   it('the enforcing mock does reject calls that ignore the limits', async () => {

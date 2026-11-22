@@ -1,0 +1,28 @@
+{
+  "result": "ok",
+  "status": {
+    "onDuration": "1",
+    "onDurSec": "0",
+    "total": "1",
+    "totalSec": "0",
+    "onStamp": "1795000000000",
+    "firstDt": "1795000000000",
+    "vel": "8509",
+    "pbThrd": "0",
+    "pcThrd": "0",
+    "pDelay": "0",
+    "pbCnt": "0",
+    "pcCnt": "0",
+    "vol": "0",
+    "fmc": "1",
+    "frd": "L",
+    "wFlag": "0",
+    "volExp": "0",
+    "spb": "0",
+    "spc": "0",
+    "pbm": "0",
+    "pcm": "0",
+    "dur": "60",
+    "cm": "M"
+  }
+}

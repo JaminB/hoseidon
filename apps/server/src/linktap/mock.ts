@@ -1,5 +1,5 @@
 import type { AlarmFlag, WorkMode } from '@hoseidon/shared';
-import { LINKTAP_LIMITS, type Bucket, type Transport } from './client';
+import type { Bucket, Transport } from './client';
 import { baseId } from './normalize';
 
 /**
@@ -11,6 +11,7 @@ import { baseId } from './normalize';
  */
 
 interface MockRun {
+  /** When the valve opened (LinkTap's `onStamp`); can lag the command by `startLatencyMs`. */
   startedAt: number;
   totalSec: number;
   autoBack: boolean;
@@ -28,6 +29,8 @@ interface MockTaplinker {
   flow: number | null;
   alarms: Set<AlarmFlag>;
   run: MockRun | null;
+  /** Planned seconds of the last run; status answers `{ dur }` with it once the run is over. */
+  lastDurSec: number | null;
   history: { startedAt: number; durationSec: number; volumeMl: number | null }[];
 }
 
@@ -49,7 +52,28 @@ export interface MockOptions {
   /** Start the "Front Lawn" run at construction. Default true. */
   seedRunning?: boolean;
   seed?: number;
+  /**
+   * Delay between an accepted start and the valve opening. Until then getWateringStatus says
+   * `null` and getAllDevices shows no watering, as seen live (null 12 s after an ok start that
+   * did run). Default 0.
+   */
+  startLatencyMs?: number;
 }
+
+/**
+ * The real API's limits as observed/documented (not Hoseidon's safety-padded spacing).
+ * getWateringStatus is enforced account-wide here, matching how Hoseidon treats it.
+ */
+export const MOCK_API_LIMITS: Record<Bucket, { intervalMs: number; perTaplinker?: boolean }> = {
+  devices: { intervalMs: 5 * 60_000 },
+  status: { intervalMs: 30_000 },
+  history: { intervalMs: 10 * 60_000, perTaplinker: true },
+  command: { intervalMs: 15_000 },
+};
+
+const RATE_LIMIT_MESSAGES: Partial<Record<Bucket, string>> = {
+  status: 'The minimum interval of calling this API is 30 seconds.',
+};
 
 const ENDPOINT_BUCKET: Record<string, Bucket> = {
   getAllDevices: 'devices',
@@ -102,6 +126,7 @@ function tl(
     workMode: 'M',
     flow: 3800,
     run: null,
+    lastDurSec: null,
     history: [],
     ...rest,
     alarms: new Set(rest.alarms ?? []),
@@ -130,11 +155,13 @@ export class LinkTapMock {
   private readonly timeZone: string;
   private readonly lastCall = new Map<string, number>();
   private readonly silentFailures = new Map<string, number>();
+  private readonly startLatencyMs: number;
 
   constructor(opts: MockOptions = {}) {
     this.now = opts.now ?? Date.now;
     this.enforce = opts.enforceRateLimits ?? true;
     this.timeZone = opts.timeZone ?? Intl.DateTimeFormat().resolvedOptions().timeZone;
+    this.startLatencyMs = opts.startLatencyMs ?? 0;
     this.gateways = [
       {
         id: MOCK_IDS.backyard,
@@ -229,10 +256,14 @@ export class LinkTapMock {
       return err(`Unknown API: ${endpoint}`);
     }
     if (bucket && this.enforce) {
-      const key = bucket === 'status' ? `status:${String(body.taplinkerId)}` : bucket;
+      const limit = MOCK_API_LIMITS[bucket];
+      const key = limit.perTaplinker ? `${bucket}:${String(body.taplinkerId)}` : bucket;
       const last = this.lastCall.get(key);
-      if (last !== undefined && at - last < LINKTAP_LIMITS[bucket].intervalMs) {
-        return err('The API is called too frequently. Please try again later.');
+      if (last !== undefined && at - last < limit.intervalMs) {
+        return err(
+          RATE_LIMIT_MESSAGES[bucket] ??
+            'The API is called too frequently. Please try again later.',
+        );
       }
       this.lastCall.set(key, at);
     }
@@ -255,7 +286,7 @@ export class LinkTapMock {
 
     switch (endpoint) {
       case 'getWateringStatus':
-        return { result: 'ok', status: taplinker.run ? this.renderWatering(taplinker) : null };
+        return { result: 'ok', status: this.renderStatus(taplinker) };
       case 'getWateringHistory':
         // Real API: the records are under `status`.
         return { result: 'ok', status: this.renderHistory(taplinker) };
@@ -277,11 +308,11 @@ export class LinkTapMock {
           }
           const silent = this.silentFailures.get(taplinker.id) ?? 0;
           if (silent > 0) this.silentFailures.set(taplinker.id, silent - 1);
-          else this.startRun(taplinker, sec, body.autoBack !== false, at);
+          else this.startRun(taplinker, sec, body.autoBack !== false, at + this.startLatencyMs);
         } else {
           this.finishRun(taplinker, at);
         }
-        return { result: 'ok' };
+        return { result: 'ok', message: 'success' };
       }
       case 'pauseWateringPlan': {
         const h = Number(body.pauseDuration);
@@ -316,14 +347,27 @@ export class LinkTapMock {
     return { gateway, taplinker };
   }
 
+  /** `at` is when the valve opens (the command time plus any start latency). */
   private startRun(t: MockTaplinker, totalSec: number, autoBack: boolean, at: number) {
-    if (t.run) this.finishRun(t, at);
+    if (t.run) this.finishRun(t, Math.min(at, this.now()));
     t.run = { startedAt: at, totalSec, autoBack, prevMode: t.workMode };
+    t.lastDurSec = totalSec;
     t.workMode = 'M';
+  }
+
+  /** A run whose valve has actually opened (start latency over). */
+  private liveRun(t: MockTaplinker): MockRun | null {
+    return t.run && this.now() >= t.run.startedAt ? t.run : null;
   }
 
   private finishRun(t: MockTaplinker, at: number) {
     if (!t.run) return;
+    if (at < t.run.startedAt) {
+      // Stopped before the valve opened: nothing ran, nothing in history.
+      if (t.run.autoBack) t.workMode = t.run.prevMode;
+      t.run = null;
+      return;
+    }
     const elapsed = Math.max(
       0,
       Math.min(t.run.totalSec, Math.round((at - t.run.startedAt) / 1000)),
@@ -370,14 +414,54 @@ export class LinkTapMock {
     }
   }
 
+  /**
+   * getWateringStatus, shaped like the live API: every value a string, minutes + seconds parts,
+   * `dur` in seconds, `onStamp` the start (ms). `vol` stays "0" while running (live behaviour).
+   * Idle after a run: `{ dur }` only. Never ran (or still in start latency): null.
+   */
+  private renderStatus(t: MockTaplinker) {
+    const run = this.liveRun(t);
+    if (!run) return t.lastDurSec !== null && !t.run ? { dur: String(t.lastDurSec) } : null;
+    const minSec = (s: number) => [String(Math.floor(s / 60)), String(s % 60)] as const;
+    const [totalMin, totalSec] = minSec(run.totalSec);
+    const stamp = String(run.startedAt);
+    return {
+      onDuration: totalMin,
+      onDurSec: totalSec,
+      total: totalMin,
+      totalSec,
+      onStamp: stamp,
+      firstDt: stamp,
+      vel: String(t.flow ?? 0),
+      pbThrd: '0',
+      pcThrd: '0',
+      pDelay: '0',
+      pbCnt: '0',
+      pcCnt: '0',
+      vol: '0',
+      fmc: t.flow === null ? '0' : '1',
+      frd: 'L',
+      wFlag: '0',
+      volExp: '0',
+      spb: '0',
+      spc: '0',
+      pbm: '0',
+      pcm: '0',
+      dur: String(run.totalSec),
+      cm: 'M',
+    };
+  }
+
+  /** getAllDevices `watering` (still the inferred shape: minutes). */
   private renderWatering(t: MockTaplinker) {
-    if (!t.run) return null;
-    const elapsedSec = (this.now() - t.run.startedAt) / 1000;
-    const remainingSec = Math.max(0, t.run.totalSec - elapsedSec);
+    const run = this.liveRun(t);
+    if (!run) return null;
+    const elapsedSec = (this.now() - run.startedAt) / 1000;
+    const remainingSec = Math.max(0, run.totalSec - elapsedSec);
     const min = (s: number) => Math.round((s / 60) * 100) / 100;
     return {
       remaining: min(remainingSec),
-      total: min(t.run.totalSec),
+      total: min(run.totalSec),
       onDuration: min(remainingSec),
       vel: t.flow,
       vol: t.flow === null ? null : Math.round((t.flow * elapsedSec) / 60),
@@ -407,7 +491,7 @@ export class LinkTapMock {
           ...(t.workMode === 'N' ? {} : { plan: this.renderPlan(t) }),
           watering: this.renderWatering(t),
           // Real API: `vel` is top-level, the last/current flow in ml/min (0 when idle).
-          vel: t.run ? (t.flow ?? 0) : 0,
+          vel: this.liveRun(t) ? (t.flow ?? 0) : 0,
           // Real API: the fall alarm is `fall`. pcFlag/pbFlag only appear on some firmware.
           fall: t.alarms.has('fallFlag'),
           valveBroken: t.alarms.has('valveBroken'),
