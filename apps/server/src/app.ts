@@ -18,6 +18,11 @@ import { GcalService } from './gcal/service';
 import type { OpenMeteoProvider } from './weather/open-meteo';
 import type { SchedulerEngine } from './schedule/engine';
 import type { Executor } from './schedule/executor';
+import { authRoutes } from './api/auth';
+import { settingsRoutes } from './api/settings';
+import { apiGuard } from './auth/guard';
+import { AuthService } from './auth/service';
+import { PushService } from './push/service';
 
 const VERSION = '0.1.0';
 
@@ -39,6 +44,10 @@ export interface AppDeps {
   gcal?: GcalService;
   /** Default schedule time zone when a gateway has none. Default: the server's. */
   timeZone?: string;
+  auth?: AuthService;
+  push?: PushService;
+  /** Require a session on /api. Only tests turn this off. Default true. */
+  requireAuth?: boolean;
 }
 
 export function createApp({
@@ -51,6 +60,9 @@ export function createApp({
   weather,
   timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone,
   gcal = new GcalService({ db, config, timeZone, executor }),
+  auth = new AuthService({ db, config }),
+  push = new PushService({ db, config }),
+  requireAuth = true,
 }: AppDeps) {
   const app = new Hono();
   if (process.env.NODE_ENV !== 'test') {
@@ -68,6 +80,9 @@ export function createApp({
     };
     return c.json(body);
   });
+  if (requireAuth) api.use('*', apiGuard({ auth, publicUrl: config.PUBLIC_URL }));
+  api.route('/', authRoutes({ auth, publicUrl: config.PUBLIC_URL }));
+  api.route('/', settingsRoutes({ db, config, linktap, poller, push, activeTimeZone: timeZone }));
   api.route('/', apiRoutes({ db, linktap, poller, mock: config.LINKTAP_MOCK }));
   api.route(
     '/',
@@ -94,7 +109,10 @@ export function createApp({
       db,
       secret: config.WEBHOOK_SECRET,
       username: config.LINKTAP_USERNAME || undefined,
-      onEvent: () => void poller?.pollRunning(),
+      onEvent: () => {
+        void poller?.pollRunning();
+        void push.flush();
+      },
     }),
   );
 

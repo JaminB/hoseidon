@@ -22,3 +22,4 @@ export * from './quick-add';
 export * from './analytics';
 export * from './network';
 export * from './gcal';
+export * from './auth';

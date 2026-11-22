@@ -74,6 +74,8 @@ export interface LinkTapClient {
   nextAvailableAt(bucket: Bucket, scope?: string): Date;
   /** Per-endpoint call health since the client was created. */
   stats(): ApiStats;
+  /** Register the account-wide webhook URL (one per account). Counts as a command. */
+  setWebHookUrl(url: string): Promise<void>;
 }
 
 export function httpTransport(baseUrl = LINKTAP_BASE_URL, fetchImpl = fetch): Transport {
@@ -231,6 +233,8 @@ export function createLinkTapClient(opts: ClientOptions): LinkTapClient {
     },
 
     dismissAlarm: (ref, alarm) => command('dismissAlarm', { ...ids(ref), alarm }),
+
+    setWebHookUrl: (url) => command('setWebHookUrl', { webHookUrl: url }),
 
     nextAvailableAt: (bucket, scope) => limiter.nextAvailableAt(bucket, scope),
 
