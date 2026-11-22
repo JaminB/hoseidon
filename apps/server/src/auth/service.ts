@@ -98,6 +98,8 @@ const FAIL_PREFIX = 'loginfail:';
 const CHALLENGE_PREFIX = 'challenge:';
 const REG_CHALLENGE_PREFIX = 'regchallenge:';
 const SIGNIN_PREFIX = 'gsignin:';
+/** Cap on unfinished Google sign-ins; a household needs a handful at once. */
+const MAX_PENDING_SIGNINS = 200;
 
 /**
  * Two ways in:
@@ -404,6 +406,8 @@ export class AuthService {
       expectedRPID: this.rp.id,
     }).catch(() => undefined);
     if (!result?.verified) return false;
+    // The user may have been removed or disabled while verification was awaited.
+    if (!this.passkeyOwnerAllowed(email)) return false;
     const { credential } = result.registrationInfo;
     this.o.db
       .insert(passkeys)
@@ -456,6 +460,13 @@ export class AuthService {
       },
     }).catch(() => undefined);
     if (!result?.verified) return null;
+    // Re-check after the await: removal may have run meanwhile and already deleted the passkey.
+    if (
+      !this.passkeyOwnerAllowed(row.userEmail) ||
+      !db.select({ id: passkeys.id }).from(passkeys).where(eq(passkeys.id, row.id)).get()
+    ) {
+      return null;
+    }
     db.update(passkeys)
       .set({ counter: result.authenticationInfo.newCounter, lastUsedAt: new Date(this.now()) })
       .where(eq(passkeys.id, row.id))
@@ -482,6 +493,10 @@ export class AuthService {
     if (!this.googleEnabled) return null;
     const now = this.now();
     pruneEphemeral(this.o.db, new Date(now));
+    // Public and unauthenticated: bound the rows it can leave behind (Workers also rate-limit).
+    if (listEphemeral(this.o.db, SIGNIN_PREFIX, new Date(now)).length >= MAX_PENDING_SIGNINS) {
+      return null;
+    }
     const state = randomBytes(24).toString('base64url');
     const nonce = randomBytes(24).toString('base64url');
     const { verifier, challenge } = pkcePair();
@@ -540,9 +555,16 @@ export class AuthService {
       this.o.log?.('Google sign-in refused: the account is not invited');
       return { ok: false, reason: 'not_invited' };
     }
+    // Key the account on Google's `sub`: an address reassigned to another Google account must not
+    // inherit the invitation. Bound on first sign-in, checked on every later one.
+    if (user.googleSub && user.googleSub !== identity.sub) {
+      this.o.log?.('Google sign-in refused: the Google account differs from the one first used');
+      return { ok: false, reason: 'not_invited' };
+    }
     this.o.db
       .update(users)
       .set({
+        googleSub: identity.sub,
         name: identity.name ?? user.name,
         picture: identity.picture ?? user.picture,
         lastLoginAt: new Date(this.now()),
@@ -569,10 +591,13 @@ export class AuthService {
   addUser(email: string, role: UserRole, addedBy: string | null): UserRow {
     const e = normalizeEmail(email);
     if (this.user(e)) throw new UserError(409, 'That email is already on the list');
-    this.o.db
-      .insert(users)
-      .values({ email: e, role, addedBy, createdAt: new Date(this.now()) })
-      .run();
+    this.o.db.transaction((tx) => {
+      // Backstop: re-inviting an address never revives old sessions or passkeys.
+      revokeAccess(tx, e);
+      tx.insert(users)
+        .values({ email: e, role, addedBy, createdAt: new Date(this.now()) })
+        .run();
+    });
     return this.user(e)!;
   }
 
@@ -591,7 +616,10 @@ export class AuthService {
         })
         .where(eq(users.email, e))
         .run();
-      if (patch.disabled) revokeAccess(tx, e);
+      if (patch.disabled) {
+        revokeAccess(tx, e);
+        tx.update(users).set({ googleSub: null }).where(eq(users.email, e)).run();
+      }
     });
     return this.user(e)!;
   }

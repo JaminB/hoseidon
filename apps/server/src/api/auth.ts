@@ -164,7 +164,7 @@ export function authRoutes({
 
   api.get('/auth/google/start', (c) => {
     const started = auth.startGoogle(c.req.query('next'));
-    if (!started) return signinFailed(c, 'not_configured');
+    if (!started) return signinFailed(c, auth.googleEnabled ? 'failed' : 'not_configured');
     setCookie(c, SIGNIN_STATE_COOKIE, started.state, {
       httpOnly: true,
       secure,

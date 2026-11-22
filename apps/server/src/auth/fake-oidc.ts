@@ -38,6 +38,9 @@ export interface AuthorizeOptions {
   signWith?: CryptoKey;
   /** Header kid to put in the token (default: the current key's). */
   kid?: string;
+  /** Header alg (default RS256). `sig` replaces the signature (`''` = unsigned). */
+  alg?: string;
+  sig?: string;
 }
 
 export class FakeOidc {
@@ -73,9 +76,15 @@ export class FakeOidc {
     return this.keys[0]!.kid;
   }
 
-  async sign(claims: Claims, o: { key?: CryptoKey; kid?: string } = {}): Promise<string> {
-    const header = b64url(JSON.stringify({ alg: 'RS256', kid: o.kid ?? this.kid, typ: 'JWT' }));
+  async sign(
+    claims: Claims,
+    o: { key?: CryptoKey; kid?: string; alg?: string; sig?: string } = {},
+  ): Promise<string> {
+    const header = b64url(
+      JSON.stringify({ alg: o.alg ?? 'RS256', kid: o.kid ?? this.kid, typ: 'JWT' }),
+    );
     const payload = b64url(JSON.stringify(claims));
+    if (o.sig !== undefined) return `${header}.${payload}.${o.sig}`;
     const sig = await crypto.subtle.sign(
       { name: 'RSASSA-PKCS1-v1_5' },
       o.key ?? this.keys[0]!.privateKey,
@@ -108,7 +117,7 @@ export class FakeOidc {
       challenge: q.get('code_challenge') ?? '',
       redirectUri: q.get('redirect_uri') ?? '',
       clientId: q.get('client_id') ?? '',
-      token: this.sign(claims, { key: o.signWith, kid: o.kid }),
+      token: this.sign(claims, { key: o.signWith, kid: o.kid, alg: o.alg, sig: o.sig }),
     });
     return code;
   }

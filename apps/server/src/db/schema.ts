@@ -326,6 +326,8 @@ export const users = sqliteTable('users', {
   createdAt: createdAt(),
   lastLoginAt: ts('last_login_at'),
   disabled: integer('disabled', { mode: 'boolean' }).notNull().default(false),
+  /** Google account id (`sub`), bound on first sign-in; a different account for this email is refused. */
+  googleSub: text('google_sub'),
 });
 
 /** Browser sessions. Only a hash of the cookie token is stored, so a DB leak can't be replayed. */

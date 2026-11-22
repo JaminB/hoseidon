@@ -1,0 +1,1 @@
+ALTER TABLE `users` ADD `google_sub` text;

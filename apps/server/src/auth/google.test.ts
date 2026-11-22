@@ -146,6 +146,59 @@ describe('Google sign-in: callback', () => {
     expect(h.db.select().from(sessions).all()[0]!.userEmail).toBe(OWNER);
   });
 
+  it('normalises the email claim (trim + lowercase) before the allowlist check', async () => {
+    const h = await setup();
+    const { session: owner } = await signIn(h, { email: OWNER });
+    await json(h, 'POST', '/api/admin/users', owner, { email: 'friend@example.com' });
+    const { session } = await signIn(h, {
+      email: 'friend@example.com',
+      claims: { email: ' Friend@EXAMPLE.com ' },
+    });
+    expect(session).toBeDefined();
+    const emails = h.db
+      .select()
+      .from(sessions)
+      .all()
+      .map((s) => s.userEmail);
+    expect(emails).toContain('friend@example.com');
+  });
+
+  it('binds the Google account (sub) on first sign-in and refuses another one for that email', async () => {
+    const h = await setup();
+    const { session: owner } = await signIn(h, { email: OWNER });
+    await json(h, 'POST', '/api/admin/users', owner, { email: 'friend@example.com' });
+    const as = (sub: string) => signIn(h, { email: 'friend@example.com', claims: { sub } });
+    expect((await as('sub-A')).session).toBeDefined();
+    expect(h.auth.user('friend@example.com')!.googleSub).toBe('sub-A');
+    const other = await as('sub-B');
+    expect(reason(other.res)).toBe('not_invited');
+    expect(other.session).toBeUndefined();
+    expect((await as('sub-A')).session).toBeDefined();
+    // Remove and re-invite: the binding starts over.
+    await json(h, 'DELETE', '/api/admin/users/friend@example.com', owner);
+    await json(h, 'POST', '/api/admin/users', owner, { email: 'friend@example.com' });
+    expect((await as('sub-B')).session).toBeDefined();
+  });
+
+  it('re-inviting an address does not revive old sessions or passkeys', async () => {
+    const h = await setup();
+    h.db
+      .insert(sessions)
+      .values({
+        id: 'stale',
+        expiresAt: new Date(Date.now() + 1e9),
+        userEmail: 'friend@example.com',
+      })
+      .run();
+    h.db
+      .insert(passkeys)
+      .values({ id: 'stale-pk', name: 'Old', publicKey: 'x', userEmail: 'friend@example.com' })
+      .run();
+    h.auth.addUser('friend@example.com', 'member', OWNER);
+    expect(h.db.select().from(sessions).where(eq(sessions.id, 'stale')).all()).toHaveLength(0);
+    expect(h.db.select().from(passkeys).where(eq(passkeys.id, 'stale-pk')).all()).toHaveLength(0);
+  });
+
   it('accepts the bare issuer form too', async () => {
     const h = await setup();
     const { session } = await signIn(h, { email: OWNER, claims: { iss: 'accounts.google.com' } });
@@ -158,6 +211,9 @@ describe('Google sign-in: callback', () => {
   ][] = [
     ['a bad signature', async () => ({ signWith: await FakeOidc.strayKey() })],
     ['an unknown key id', { kid: 'nope' }],
+    ['alg none with no signature', { alg: 'none', sig: '' }],
+    ['alg HS256', { alg: 'HS256' }],
+    ['an RS256 header with an empty signature', { sig: '' }],
     [
       'the wrong audience',
       { claims: { aud: 'someone-else.apps.googleusercontent.com', azp: undefined } },
@@ -471,5 +527,16 @@ describe('passkeys per user', () => {
     const { challengeId } = await h.auth.authenticationOptions();
     const s = await h.auth.loginWithPasskey(challengeId, { id: 'ghost' } as never);
     expect(s).toBeNull();
+  });
+});
+
+describe('Google sign-in start: pending cap', () => {
+  it('stops writing rows once too many sign-ins are pending', async () => {
+    const h = await setup();
+    for (let i = 0; i < 200; i++) expect(h.auth.startGoogle()).not.toBeNull();
+    const res = await h.app.request('/api/auth/google/start');
+    expect(res.status).toBe(302);
+    expect(reason(res)).toBe('failed');
+    expect(res.headers.getSetCookie().some((c) => c.startsWith('hoseidon_signin='))).toBe(false);
   });
 });

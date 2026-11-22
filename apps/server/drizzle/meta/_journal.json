@@ -57,6 +57,13 @@
       "when": 1795387066378,
       "tag": "0007_users",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "6",
+      "when": 1795388325848,
+      "tag": "0008_users_google_sub",
+      "breakpoints": true
     }
   ]
 }

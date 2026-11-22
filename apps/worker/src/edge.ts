@@ -97,7 +97,13 @@ async function gate(request: Request, url: URL, env: EdgeEnv): Promise<Response 
   if (env.AUTH_LIMITER && path !== '/gcal/callback') {
     const ip = request.headers.get('cf-connecting-ip') ?? 'unknown';
     const { success } = await env.AUTH_LIMITER.limit({ key: clientKey(ip) });
-    if (!success) return json(429, 'too many requests');
+    if (!success) {
+      // Google sign-in routes are browser navigations: send them back to the login page, not JSON.
+      if (request.method === 'GET' && path.startsWith('/auth/google/')) {
+        return Response.redirect(new URL('/?signin=failed', url).toString(), 302);
+      }
+      return json(429, 'too many requests');
+    }
   }
   return null;
 }

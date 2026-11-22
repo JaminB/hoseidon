@@ -144,8 +144,13 @@ describe('edgeCheck: Google sign-in and the admin API', () => {
     expect(await nav('/api/auth/google/callback?code=abc&state=xyz')).toBeNull();
     expect(seen).toEqual(['203.0.113.9', '203.0.113.9']);
     allow = false;
-    expect((await nav('/api/auth/google/start'))?.status).toBe(429);
-    expect((await nav('/api/auth/google/callback?code=abc&state=xyz'))?.status).toBe(429);
+    // Navigations are sent back to the login page rather than shown a JSON 429.
+    for (const path of ['/api/auth/google/start', '/api/auth/google/callback?code=abc&state=xyz']) {
+      const res = await nav(path);
+      expect(res?.status).toBe(302);
+      const to = new URL(res!.headers.get('location')!);
+      expect(to.pathname + to.search).toBe('/?signin=failed');
+    }
   });
 
   it('only GETs are public there', async () => {
