@@ -393,6 +393,7 @@ export class LinkTapMock {
           clogFlag: t.alarms.has('clogFlag'),
           pcFlag: t.alarms.has('pcFlag'),
           pbFlag: t.alarms.has('pbFlag'),
+          freezeFlag: t.alarms.has('freezeFlag'),
         };
       }),
     };

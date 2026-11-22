@@ -1,3 +1,7 @@
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import Database from 'better-sqlite3';
 import { describe, expect, it } from 'vitest';
 import { eq } from 'drizzle-orm';
 import {
@@ -270,5 +274,71 @@ describe('webhook receiver', () => {
     await h.app.request(...hook('s3cret', { event: 'wateringOn', deviceId: 'B1C2D3E4F5A60013' }));
     expect(h.db.select().from(runs).where(eq(runs.deviceId, MOCK_IDS.dripA)).all()).toHaveLength(0);
     expect(h.db.select().from(events).all().at(-1)?.deviceId).toBe('B1C2D3E4F5A60013');
+  });
+});
+
+describe('review hardening', () => {
+  const patch = (body: unknown) => ({ ...json(body), method: 'PATCH' });
+
+  it('rejects unknown time zones, empty patches and malformed JSON', async () => {
+    const { app } = await seeded();
+    const url = `/api/gateways/${MOCK_IDS.backyard}`;
+    expect((await app.request(url, patch({ timezone: 'Not/AZone' }))).status).toBe(400);
+    expect((await app.request(url, patch({}))).status).toBe(400);
+    expect((await app.request(url, { method: 'PATCH', body: '{oops' })).status).toBe(400);
+    expect((await app.request(`/api/devices/${MOCK_IDS.dripA}`, patch({}))).status).toBe(400);
+  });
+
+  it('rejects non-integer event limits', async () => {
+    const { app } = await seeded();
+    expect((await app.request('/api/events?limit=1.5')).status).toBe(400);
+    expect((await app.request('/api/events?limit=10')).status).toBe(200);
+  });
+
+  it('redacts the webhook secret from log lines', async () => {
+    const { redactSecrets } = await import('./app');
+    expect(redactSecrets('<-- POST /hooks/linktap/s3cret?x=1')).toBe(
+      '<-- POST /hooks/linktap/***?x=1',
+    );
+  });
+
+  it('dismissing one alarm keeps alarms a poll added meanwhile', async () => {
+    const h = await seeded();
+    h.db
+      .update(devices)
+      .set({ alarms: ['noWater', 'leakFlag'] })
+      .where(eq(devices.id, MOCK_IDS.veggies))
+      .run();
+    await h.app.request(
+      `/api/devices/${MOCK_IDS.veggies}/dismiss-alarm`,
+      json({ alarm: 'noWater' }),
+    );
+    expect(
+      h.db.select().from(devices).where(eq(devices.id, MOCK_IDS.veggies)).get()?.alarms,
+    ).toEqual(['leakFlag']);
+  });
+
+  it('a gateway-offline webhook takes its devices offline too', async () => {
+    const h = await seeded();
+    await h.app.request(
+      '/hooks/linktap/s3cret',
+      json({ event: 'gatewayOffline', gatewayId: MOCK_IDS.backyard }),
+    );
+    const res = await h.app.request(`/api/devices/${MOCK_IDS.dripA}/run`, json({ seconds: 60 }));
+    expect(res.status).toBe(409);
+  });
+
+  it('upgrades a phase 0 database (hand-made empty settings table)', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'hoseidon-'));
+    const path = join(dir, 'db.sqlite');
+    const old = new Database(path);
+    old.exec(
+      'CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at INTEGER NOT NULL DEFAULT (unixepoch()))',
+    );
+    old.close();
+    const { sqlite: upgraded } = openDb(path);
+    expect(upgraded.prepare('select count(*) c from gateways').get()).toEqual({ c: 0 });
+    upgraded.close();
+    rmSync(dir, { recursive: true, force: true });
   });
 });

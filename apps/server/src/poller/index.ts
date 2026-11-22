@@ -1,4 +1,4 @@
-import { and, asc, eq, gt, isNotNull, or } from 'drizzle-orm';
+import { and, eq, gt, isNotNull, or } from 'drizzle-orm';
 import type { Db } from '../db';
 import { devices, gateways, runs } from '../db/schema';
 import type { LinkTapClient } from '../linktap/client';
@@ -40,6 +40,9 @@ export interface PollerOptions {
 export class Poller {
   private readonly intervals: PollerIntervals;
   private readonly timers: NodeJS.Timeout[] = [];
+  private startup: NodeJS.Timeout | undefined;
+  /** Last history attempt per device (success or not), so one failing device can't hog the turn. */
+  private readonly historyAttempts = new Map<string, number>();
   private readonly busy = new Set<Task>();
   private readonly last: PollerStatus['last'] = {
     devices: { at: null, error: null },
@@ -60,13 +63,15 @@ export class Poller {
       setInterval(() => void this.pollRunning(), this.intervals.statusMs),
       setInterval(() => void this.pollHistoryNext(), this.intervals.historyMs),
     );
-    setTimeout(() => void this.pollHistoryNext(), 10_000).unref();
-    for (const t of this.timers) t.unref();
+    this.startup = setTimeout(() => void this.pollHistoryNext(), 10_000);
+    for (const t of [...this.timers, this.startup]) t.unref();
   }
 
   stop(): void {
     for (const t of this.timers) clearInterval(t);
     this.timers.length = 0;
+    if (this.startup) clearTimeout(this.startup);
+    this.startup = undefined;
   }
 
   status(): PollerStatus {
@@ -93,11 +98,12 @@ export class Poller {
         .all();
       const results = await Promise.allSettled(
         active.map(async (d) => {
+          const sampledAt = new Date();
           const watering = await client.getWateringStatus({
             gatewayId: d.gatewayId,
             taplinkerId: d.id,
           });
-          ingestWateringStatus(db, d.id, watering, new Date());
+          ingestWateringStatus(db, d.id, watering, new Date(), sampledAt);
         }),
       );
       const failed = results.find((r) => r.status === 'rejected');
@@ -107,7 +113,7 @@ export class Poller {
 
   /**
    * Fetch history for one device per tick, so the calls are staggered across the window. Devices
-   * that finished a run since their last fetch go first, then whoever is most out of date.
+   * that finished a run since their last attempt go first, then whoever was tried longest ago.
    */
   pollHistoryNext(): Promise<void> {
     return this.guard('history', async () => {
@@ -121,22 +127,24 @@ export class Poller {
         })
         .from(devices)
         .innerJoin(gateways, eq(gateways.id, devices.gatewayId))
-        .orderBy(asc(devices.historyFetchedAt))
         .all();
-      if (!rows.length) return;
+      const touched = (r: (typeof rows)[number]) =>
+        Math.max(r.fetchedAt?.getTime() ?? 0, this.historyAttempts.get(r.id) ?? 0);
+      // Stable sort: least recently touched first (never-fetched devices are 0).
+      const ordered = rows.sort((a, b) => touched(a) - touched(b));
 
-      const recentlyFinished = rows.find(
+      const recentlyFinished = ordered.find(
         (r) =>
-          r.fetchedAt !== null &&
+          touched(r) > 0 &&
           db
             .select({ id: runs.id })
             .from(runs)
-            .where(and(eq(runs.deviceId, r.id), gt(runs.endedAt, r.fetchedAt)))
+            .where(and(eq(runs.deviceId, r.id), gt(runs.endedAt, new Date(touched(r)))))
             .get() !== undefined,
       );
-      const never = rows.find((r) => r.fetchedAt === null);
-      const pick = recentlyFinished ?? never ?? rows[0];
+      const pick = recentlyFinished ?? ordered[0];
       if (!pick) return;
+      this.historyAttempts.set(pick.id, Date.now());
 
       const entries = await client.getWateringHistory(
         { gatewayId: pick.gatewayId, taplinkerId: pick.id },

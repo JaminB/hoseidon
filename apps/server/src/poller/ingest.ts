@@ -127,9 +127,10 @@ export function ingestDevices(db: Db, polled: NormalizedGateway[], now: Date): N
         if (old) deriveDeviceEvents(old, { ...set, id: t.id }, now, ev);
       }
     }
+    // Same transaction: if the events fail, the state change rolls back and the next poll
+    // sees the transition again.
+    insertEvents(tx, derived);
   });
-
-  insertEvents(db, derived);
   return derived;
 }
 
@@ -294,9 +295,23 @@ export function closeRun(
  * watering and we don't know about it (a LinkTap plan or the app started it), close it when
  * watering stops.
  */
-function syncRunWithWatering(tx: Tx, deviceId: string, watering: Watering | null, now: Date) {
+function syncRunWithWatering(
+  tx: Tx,
+  deviceId: string,
+  watering: Watering | null,
+  now: Date,
+  sampledAt?: Date,
+) {
   const open = openRun(tx, deviceId);
-  if (watering && !open) {
+  // A stale "still watering" sample must not reopen a run that closed while it was in flight.
+  const closedSinceSample =
+    sampledAt !== undefined &&
+    tx
+      .select({ id: runs.id })
+      .from(runs)
+      .where(and(eq(runs.deviceId, deviceId), gte(runs.endedAt, sampledAt)))
+      .get() !== undefined;
+  if (watering && !open && !closedSinceSample) {
     const elapsed =
       watering.totalSec !== null && watering.remainingSec !== null
         ? Math.max(0, watering.totalSec - watering.remainingSec)
@@ -323,10 +338,12 @@ export function ingestWateringStatus(
   deviceId: string,
   watering: Watering | null,
   now: Date,
+  /** When the status request was sent; guards against races with webhooks/stop commands. */
+  sampledAt?: Date,
 ): void {
   db.transaction((tx) => {
     tx.update(devices).set({ watering, updatedAt: now }).where(eq(devices.id, deviceId)).run();
-    syncRunWithWatering(tx, deviceId, watering, now);
+    syncRunWithWatering(tx, deviceId, watering, now, sampledAt);
   });
 }
 
@@ -347,6 +364,7 @@ export function ingestHistory(
       const endedAt = new Date(e.startedAt.getTime() + e.durationSec * 1000);
       // Skip a record that is still in progress; the status poller owns it.
       if (endedAt > now) continue;
+      // Closest-starting run in the window that doesn't start after this record ended.
       const match = tx
         .select()
         .from(runs)
@@ -354,10 +372,18 @@ export function ingestHistory(
           and(
             eq(runs.deviceId, deviceId),
             gte(runs.startedAt, new Date(e.startedAt.getTime() - RUN_MATCH_WINDOW_MS)),
-            lte(runs.startedAt, new Date(e.startedAt.getTime() + RUN_MATCH_WINDOW_MS)),
+            lte(
+              runs.startedAt,
+              new Date(Math.min(e.startedAt.getTime() + RUN_MATCH_WINDOW_MS, endedAt.getTime())),
+            ),
           ),
         )
-        .get();
+        .all()
+        .sort(
+          (a, b) =>
+            Math.abs(a.startedAt.getTime() - e.startedAt.getTime()) -
+            Math.abs(b.startedAt.getTime() - e.startedAt.getTime()),
+        )[0];
       if (match) {
         if (
           match.status !== 'running' &&
@@ -456,6 +482,11 @@ export function ingestWebhook(db: Db, payload: WebhookPayload, now: Date): NewEv
       const set = { online, ...(online ? { lastSeenAt: now } : {}) };
       if (isGatewayEvent && gatewayId) {
         tx.update(gateways).set(set).where(eq(gateways.id, gatewayId)).run();
+        // Nothing behind an offline gateway is reachable. Coming back online is per device,
+        // so leave that to the next poll.
+        if (!online) {
+          tx.update(devices).set({ online: false }).where(eq(devices.gatewayId, gatewayId)).run();
+        }
       } else {
         for (const d of deviceRows) tx.update(devices).set(set).where(eq(devices.id, d.id)).run();
       }

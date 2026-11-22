@@ -137,6 +137,42 @@ describe('Poller against the mock', () => {
     expect(lawnRun()).toMatchObject({ status: 'completed', durationSec: 600, volumeMl: 38_000 });
   });
 
+  it('one device failing history does not starve the others', async () => {
+    const h = harness();
+    await h.poller.pollDevices();
+    const real = h.mock.handle.bind(h.mock);
+    const tried: unknown[] = [];
+    h.mock.handle = (endpoint, body) => {
+      if (endpoint !== 'getWateringHistory') return real(endpoint, body);
+      tried.push(body.taplinkerId);
+      return tried.length === 1 ? { result: 'error', message: 'boom' } : real(endpoint, body);
+    };
+    await h.poller.pollHistoryNext();
+    vi.advanceTimersByTime(1000);
+    await h.poller.pollHistoryNext();
+    expect(tried).toHaveLength(2);
+    expect(tried[0]).not.toBe(tried[1]);
+  });
+
+  it('a stale "still watering" sample does not reopen a run that closed meanwhile', async () => {
+    const h = harness();
+    await h.poller.pollDevices();
+    const { ingestWateringStatus, openRun, closeRun } = await import('./ingest');
+    const sampledAt = new Date();
+    vi.advanceTimersByTime(1000);
+    const open = openRun(h.db, MOCK_IDS.frontLawn)!;
+    closeRun(h.db, open, new Date(), 'stopped');
+    vi.advanceTimersByTime(1000);
+    ingestWateringStatus(
+      h.db,
+      MOCK_IDS.frontLawn,
+      { remainingSec: 300, totalSec: 600, flowMlPerMin: null, volumeMl: null },
+      new Date(),
+      sampledAt,
+    );
+    expect(openRun(h.db, MOCK_IDS.frontLawn)).toBeUndefined();
+  });
+
   it('records errors without throwing', async () => {
     const h = harness();
     h.mock.handle = () => ({ result: 'error', message: 'nope' });

@@ -13,6 +13,9 @@ import { hookRoutes } from './api/hooks';
 
 const VERSION = '0.1.0';
 
+export const redactSecrets = (line: string) =>
+  line.replace(/(\/hooks\/linktap\/)[^\s?#]+/g, '$1***');
+
 export interface AppDeps {
   config: Config;
   db: Db;
@@ -22,7 +25,10 @@ export interface AppDeps {
 
 export function createApp({ config, db, linktap, poller }: AppDeps) {
   const app = new Hono();
-  if (process.env.NODE_ENV !== 'test') app.use(logger());
+  if (process.env.NODE_ENV !== 'test') {
+    // The webhook secret lives in the path; keep it out of the logs.
+    app.use(logger((msg, ...rest) => console.log(redactSecrets(msg), ...rest)));
+  }
 
   const api = new Hono();
   api.get('/health', (c) => {

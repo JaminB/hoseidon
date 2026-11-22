@@ -19,12 +19,25 @@ function migrationsFolder(): string {
   return found;
 }
 
+/**
+ * Phase 0 created an empty `settings` table by hand, with no migration record, so the first
+ * migration would fail on CREATE TABLE. Drop it if it's still empty and unmigrated.
+ */
+function dropPhase0Bootstrap(sqlite: Database.Database) {
+  const has = (name: string) =>
+    sqlite.prepare("select 1 from sqlite_master where type = 'table' and name = ?").get(name);
+  if (!has('settings') || has('__drizzle_migrations')) return;
+  const { n } = sqlite.prepare('select count(*) as n from settings').get() as { n: number };
+  if (n === 0) sqlite.exec('DROP TABLE settings');
+}
+
 export function openDb(path: string) {
   if (path !== ':memory:') mkdirSync(dirname(path), { recursive: true });
   const sqlite = new Database(path);
   sqlite.pragma('journal_mode = WAL');
   sqlite.pragma('foreign_keys = ON');
   const db = drizzle(sqlite, { schema });
+  dropPhase0Bootstrap(sqlite);
   migrate(db, { migrationsFolder: migrationsFolder() });
   return { sqlite, db };
 }

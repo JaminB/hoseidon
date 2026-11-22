@@ -156,16 +156,38 @@ export const pauseRequestSchema = z.object({
   hours: z.union([z.literal(-1), z.number().min(0.1).max(240)]),
 });
 export const dismissAlarmRequestSchema = z.object({ alarm: dismissableAlarmSchema });
-export const gatewayPatchSchema = z.object({
-  name: z.string().trim().min(1).max(80).nullable().optional(),
-  lat: z.number().min(-90).max(90).nullable().optional(),
-  lon: z.number().min(-180).max(180).nullable().optional(),
-  timezone: z.string().min(1).max(64).nullable().optional(),
-});
-export const devicePatchSchema = z.object({
-  name: z.string().trim().min(1).max(80).nullable().optional(),
-  zone: z.string().trim().min(1).max(80).nullable().optional(),
-});
+/** True for IANA zones the runtime knows, e.g. "America/New_York". */
+export function isValidTimeZone(tz: string): boolean {
+  try {
+    new Intl.DateTimeFormat('en-US', { timeZone: tz });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+const nonEmpty = (o: object) => Object.keys(o).length > 0;
+
+export const gatewayPatchSchema = z
+  .object({
+    name: z.string().trim().min(1).max(80).nullable().optional(),
+    lat: z.number().min(-90).max(90).nullable().optional(),
+    lon: z.number().min(-180).max(180).nullable().optional(),
+    timezone: z
+      .string()
+      .min(1)
+      .max(64)
+      .refine(isValidTimeZone, 'unknown time zone')
+      .nullable()
+      .optional(),
+  })
+  .refine(nonEmpty, 'nothing to update');
+export const devicePatchSchema = z
+  .object({
+    name: z.string().trim().min(1).max(80).nullable().optional(),
+    zone: z.string().trim().min(1).max(80).nullable().optional(),
+  })
+  .refine(nonEmpty, 'nothing to update');
 
 /** Command responses carry the rate-limit picture so the UI can show "next command in 9s". */
 export const commandResultSchema = z.object({

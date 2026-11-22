@@ -138,15 +138,17 @@ export function createLinkTapClient(opts: ClientOptions): LinkTapClient {
         { coalesceKey: 'all' },
       ),
 
-    getWateringStatus: (ref) =>
-      limiter.schedule(
+    getWateringStatus: (ref) => {
+      const id = ref.taplinkerId.trim();
+      return limiter.schedule(
         'status',
         async () => {
           const res = await call('getWateringStatus', ids(ref), getWateringStatusSchema);
           return normalizeWatering(res.status);
         },
-        { scope: ref.taplinkerId, coalesceKey: ref.taplinkerId },
-      ),
+        { scope: id, coalesceKey: id },
+      );
+    },
 
     getWateringHistory: (ref, timeZone) =>
       limiter.schedule(
@@ -155,7 +157,8 @@ export function createLinkTapClient(opts: ClientOptions): LinkTapClient {
           const res = await call('getWateringHistory', ids(ref), getWateringHistorySchema);
           return normalizeHistory(res.history ?? res.data ?? [], timeZone);
         },
-        { coalesceKey: ref.taplinkerId },
+        // Normalization depends on the time zone, so it is part of the key.
+        { coalesceKey: `${ref.taplinkerId.trim()}|${timeZone}` },
       ),
 
     startWatering: ({ seconds, eco, autoBack = true, ...ref }) => {

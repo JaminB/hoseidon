@@ -96,8 +96,11 @@
   - the webhook event strings
   - which endpoints want 16-char ids
   - whether the rate limits are per account or per device
-- Commands await the rate-limit queue, so an HTTP request can take up to about 15 s.
-- No auth yet, so every `/api` route is open.
-- A DB file created by phase 0 (which bootstrapped `settings` by hand) would fail the first
-  migration. Delete it.
+- Commands await the rate-limit queue, and the queue has no depth limit. Each queued command
+  waits for every earlier one, at 15 s apiece, so N queued commands mean a wait of about N×15 s.
+  The scheduler should send runs one at a time rather than flooding the queue.
+- There is no auth yet, so every `/api` route (including the device commands) is open. Keep the
+  server on the LAN until phase 7 adds auth. The CodeRabbit review flagged this too.
+- The webhook secret is in the URL path, so the request logger redacts `/hooks/linktap/*`.
+- `openDb` drops phase 0's empty, unmigrated `settings` table before migrating.
 - There is no retention or pruning for snapshots yet: about 288 rows per device per day.

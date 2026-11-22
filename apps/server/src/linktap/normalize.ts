@@ -206,6 +206,9 @@ export function normalizeHistory(entries: RawHistoryEntry[], timeZone: string): 
     const y = Number(ymd.slice(0, 4));
     const mo = Number(ymd.slice(4, 6));
     const d = Number(ymd.slice(6, 8));
+    // Date.UTC silently rolls Feb 30 into March; reject dates that don't round-trip.
+    const check = new Date(Date.UTC(y, mo - 1, d));
+    if (check.getUTCMonth() !== mo - 1 || check.getUTCDate() !== d) continue;
     const startedAt = zonedTimeToDate(
       y,
       mo,

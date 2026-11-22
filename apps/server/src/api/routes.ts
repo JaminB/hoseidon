@@ -37,8 +37,10 @@ class HttpError extends Error {
 }
 
 async function body<S extends z.ZodType>(c: Context, schema: S): Promise<z.infer<S>> {
-  const json: unknown = await c.req.json().catch(() => undefined);
-  const parsed = schema.safeParse(json ?? {});
+  const json: unknown = await c.req.json().catch(() => {
+    throw new HttpError(400, 'invalid JSON body');
+  });
+  const parsed = schema.safeParse(json);
   if (!parsed.success) throw new HttpError(400, 'invalid body', parsed.error.issues);
   return parsed.data;
 }
@@ -221,8 +223,10 @@ export function apiRoutes({ db, linktap, poller, mock }: ApiDeps) {
     const device = findDevice(c.req.param('id'));
     await linktap.dismissAlarm({ gatewayId: device.gatewayId, taplinkerId: device.id }, alarm);
     db.transaction((tx) => {
+      // Re-read: a poll may have changed the alarms while the command was queued.
+      const current = tx.select().from(devices).where(eq(devices.id, device.id)).get();
       tx.update(devices)
-        .set({ alarms: device.alarms.filter((a) => a !== alarm) })
+        .set({ alarms: (current?.alarms ?? []).filter((a) => a !== alarm) })
         .where(eq(devices.id, device.id))
         .run();
       insertEvents(tx, [
@@ -245,7 +249,11 @@ export function apiRoutes({ db, linktap, poller, mock }: ApiDeps) {
   // ---- events & status --------------------------------------------------------------------------
 
   api.get('/events', (c) => {
-    const limit = Math.min(Math.max(Number(c.req.query('limit') ?? 50) || 50, 1), 500);
+    const limitParam = c.req.query('limit');
+    const limit = limitParam === undefined ? 50 : Number(limitParam);
+    if (!Number.isInteger(limit) || limit < 1 || limit > 500) {
+      throw new HttpError(400, 'limit must be an integer 1..500');
+    }
     const where: SQL[] = [];
     const before = Number(c.req.query('before'));
     if (Number.isInteger(before) && before > 0) where.push(lt(events.id, before));
