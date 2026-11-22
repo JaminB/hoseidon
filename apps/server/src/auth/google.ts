@@ -64,7 +64,9 @@ export async function exchangeSigninCode(
   const json: unknown = await res.json().catch(() => null);
   if (!res.ok) {
     const code = (json as { error?: unknown } | null)?.error;
-    throw new IdTokenError(`token exchange failed: ${typeof code === 'string' ? code : res.status}`);
+    throw new IdTokenError(
+      `token exchange failed: ${typeof code === 'string' ? code : res.status}`,
+    );
   }
   const parsed = tokenResponseSchema.safeParse(json);
   if (!parsed.success) throw new IdTokenError('token response has no id_token');
@@ -88,9 +90,7 @@ export class Jwks {
   #expiresAt = 0;
   #inflight: Promise<void> | null = null;
 
-  constructor(
-    private readonly opts: { fetch: typeof fetch; now?: () => number; url?: string },
-  ) {}
+  constructor(private readonly opts: { fetch: typeof fetch; now?: () => number; url?: string }) {}
 
   private now() {
     return this.opts.now?.() ?? Date.now();

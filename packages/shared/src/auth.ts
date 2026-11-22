@@ -64,7 +64,8 @@ export const userSchema = z.object({
 export type User = z.infer<typeof userSchema>;
 
 export const userInputSchema = z.object({
-  email: z.email().max(254),
+  /** Trimmed and lowercased before it is checked. */
+  email: z.string().trim().toLowerCase().pipe(z.email().max(254)),
   role: userRoleSchema.default('member'),
 });
 export type UserInput = z.input<typeof userInputSchema>;

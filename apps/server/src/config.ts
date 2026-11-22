@@ -48,7 +48,9 @@ export function adminEmails(config: Pick<Config, 'ADMIN_EMAIL'>): string[] {
 export function googleSignInConfigured(
   config: Pick<Config, 'GOOGLE_CLIENT_ID' | 'GOOGLE_CLIENT_SECRET' | 'ADMIN_EMAIL'>,
 ): boolean {
-  return !!config.GOOGLE_CLIENT_ID && !!config.GOOGLE_CLIENT_SECRET && adminEmails(config).length > 0;
+  return (
+    !!config.GOOGLE_CLIENT_ID && !!config.GOOGLE_CLIENT_SECRET && adminEmails(config).length > 0
+  );
 }
 
 /** Values copied from .env.example, which must never protect a real deployment. */

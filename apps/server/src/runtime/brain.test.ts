@@ -8,6 +8,7 @@ import type { LinkTapClient } from '../linktap/client';
 import { MOCK_IDS } from '../linktap/mock';
 import { BrainCore, MAX_ALARM_GAP_MS, PUBLIC_URL_KEY, type AlarmPort } from './brain';
 import { TASK_COST, WHEEL } from './wheel';
+import { FakeOidc } from '../auth/fake-oidc';
 
 /**
  * The Cloudflare host's Durable Object logic, run on better-sqlite3. "Eviction" = throwing the
@@ -39,12 +40,12 @@ class FakeAlarm implements AlarmPort {
   }
 }
 
-function setup(env: Record<string, unknown> = ENV) {
+function setup(env: Record<string, unknown> = ENV, authFetch?: typeof fetch) {
   const { db } = openDb(':memory:');
   const alarm = new FakeAlarm();
   const logs: string[] = [];
   const make = (linktap?: LinkTapClient) =>
-    new BrainCore({ db, env, alarm, log: (m) => logs.push(m), linktap });
+    new BrainCore({ db, env, alarm, log: (m) => logs.push(m), linktap, authFetch });
   return { db, alarm, logs, make };
 }
 
@@ -400,5 +401,72 @@ describe('BrainCore requests', () => {
     const due = brain.wheel.dueTimes(Date.now());
     expect(due.devices).not.toBeNull();
     expect(due.engine).toBeNull();
+  });
+
+  it('runs real taps with Google sign-in and no ADMIN_PASSWORD, but not with no sign-in at all', () => {
+    const stub = new Proxy({} as LinkTapClient, { get: () => () => new Date() });
+    const real = {
+      LINKTAP_MOCK: 'false',
+      LINKTAP_USERNAME: 'someone',
+      LINKTAP_API_KEY: 'k',
+      SESSION_SECRET: 's'.repeat(40),
+      WEBHOOK_SECRET: 'w'.repeat(32),
+    };
+    const google = {
+      GOOGLE_CLIENT_ID: 'id.apps.googleusercontent.com',
+      GOOGLE_CLIENT_SECRET: 'secret',
+      ADMIN_EMAIL: 'owner@example.com',
+    };
+    expect(setup({ ...real, ...google }).make(stub).problems).toEqual([]);
+    // A weak leftover password doesn't matter once it is ignored.
+    expect(setup({ ...real, ...google, ADMIN_PASSWORD: 'short' }).make(stub).problems).toEqual([]);
+    expect(setup(real).make(stub).problems.join()).toMatch(/no sign-in is set up/);
+  });
+
+  it('signs in with Google on the adopted origin and issues a signed session', async () => {
+    const google = await FakeOidc.create('id.apps.googleusercontent.com');
+    const { make } = setup(
+      {
+        ...ENV,
+        GOOGLE_CLIENT_ID: 'id.apps.googleusercontent.com',
+        GOOGLE_CLIENT_SECRET: 'secret',
+        ADMIN_EMAIL: 'owner@example.com',
+      },
+      google.fetch,
+    );
+    const brain = make();
+    const start = await brain.fetch(new Request(`${ORIGIN}/api/auth/google/start`));
+    expect(start.status).toBe(302);
+    const location = start.headers.get('location')!;
+    expect(new URL(location).searchParams.get('redirect_uri')).toBe(
+      `${ORIGIN}/api/auth/google/callback`,
+    );
+    const state = new URL(location).searchParams.get('state')!;
+    const code = google.authorize(location, { email: 'owner@example.com' });
+    const stateCookie = start.headers.get('set-cookie')!.split(';')[0]!;
+    const cb = await brain.fetch(
+      new Request(`${ORIGIN}/api/auth/google/callback?code=${code}&state=${state}`, {
+        headers: { cookie: stateCookie },
+      }),
+    );
+    expect(cb.headers.get('location')).toBe(`${ORIGIN}/`);
+    const session = cb.headers
+      .getSetCookie()
+      .find((c) => c.startsWith('hoseidon_session='))!
+      .split(';')[0]!;
+    expect(hasValidSignature(session.split('=')[1], ENV.SESSION_SECRET)).toBe(true);
+    const gw = await brain.fetch(
+      new Request(`${ORIGIN}/api/gateways`, { headers: { cookie: session } }),
+    );
+    expect(gw.status).toBe(200);
+    // Password sign-in is off here, even though ADMIN_PASSWORD is set.
+    const pw = await brain.fetch(
+      new Request(`${ORIGIN}/api/auth/login`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', [CSRF_HEADER]: '1', origin: ORIGIN },
+        body: JSON.stringify({ password: PASSWORD }),
+      }),
+    );
+    expect(pw.status).toBe(410);
   });
 });

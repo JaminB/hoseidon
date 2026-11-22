@@ -123,6 +123,57 @@ describe('edgeCheck', () => {
   });
 });
 
+describe('edgeCheck: Google sign-in and the admin API', () => {
+  const limiter = (allow: () => boolean, seen: string[] = []): EdgeEnv => ({
+    ...env,
+    AUTH_LIMITER: {
+      limit: async ({ key }) => {
+        seen.push(key);
+        return { success: allow() };
+      },
+    },
+  });
+
+  it('lets the sign-in navigations through without a cookie, rate limited per client', async () => {
+    let allow = true;
+    const seen: string[] = [];
+    const e = limiter(() => allow, seen);
+    const nav = (path: string) =>
+      edgeCheck(req(path, { headers: { 'cf-connecting-ip': '203.0.113.9' } }), e);
+    expect(await nav('/api/auth/google/start?next=%2Fschedule')).toBeNull();
+    expect(await nav('/api/auth/google/callback?code=abc&state=xyz')).toBeNull();
+    expect(seen).toEqual(['203.0.113.9', '203.0.113.9']);
+    allow = false;
+    expect((await nav('/api/auth/google/start'))?.status).toBe(429);
+    expect((await nav('/api/auth/google/callback?code=abc&state=xyz'))?.status).toBe(429);
+  });
+
+  it('only GETs are public there', async () => {
+    const res = await edgeCheck(
+      req('/api/auth/google/start', { method: 'POST', headers: { ...CSRF } }),
+      env,
+    );
+    expect(res?.status).toBe(401);
+  });
+
+  it('needs a signed session cookie for the admin API (never the Brain without one)', async () => {
+    const e = limiter(() => true);
+    expect((await edgeCheck(req('/api/admin/users'), e))?.status).toBe(401);
+    expect(
+      (await edgeCheck(req('/api/admin/users', { headers: cookie('unsigned') }), e))?.status,
+    ).toBe(401);
+    expect(await edgeCheck(req('/api/admin/users', { headers: good }), e)).toBeNull();
+    const del = await edgeCheck(
+      req('/api/admin/users/friend%40example.com', {
+        method: 'DELETE',
+        headers: { ...good, origin: 'https://hose.example.com' },
+      }),
+      e,
+    );
+    expect(del?.status).toBe(403); // no CSRF header
+  });
+});
+
 describe('migrations.gen.ts', () => {
   it('matches apps/server/drizzle (run `pnpm --filter @hoseidon/worker gen` after db:generate)', () => {
     const script = join(dirname(fileURLToPath(import.meta.url)), '../scripts/gen-migrations.mjs');

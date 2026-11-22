@@ -113,7 +113,8 @@ export function authRoutes({
 
   /** Private routes: the apiGuard already checked the session; this resolves whose it is. */
   const signedIn: MiddlewareHandler<Env> = async (c, next) => {
-    const user = auth.sessionUser(getCookie(c, SESSION_COOKIE)) ?? (requireAuth ? null : ANON_ADMIN);
+    const user =
+      auth.sessionUser(getCookie(c, SESSION_COOKIE)) ?? (requireAuth ? null : ANON_ADMIN);
     if (!user) return c.json({ error: 'unauthorized' }, 401);
     c.set('user', user);
     await next();
@@ -211,9 +212,7 @@ export function authRoutes({
   api.use('/auth/passkeys/*', signedIn);
   api.use('/auth/passkey/register/*', signedIn);
 
-  api.get('/auth/passkeys', (c) =>
-    c.json(auth.listPasskeys(c.get('user').email).map(passkeyDto)),
-  );
+  api.get('/auth/passkeys', (c) => c.json(auth.listPasskeys(c.get('user').email).map(passkeyDto)));
 
   api.post('/auth/passkey/register/options', async (c) =>
     c.json(await auth.registrationOptions(c.get('user').email)),
