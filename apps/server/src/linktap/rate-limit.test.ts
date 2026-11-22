@@ -121,4 +121,49 @@ describe('RateLimiter', () => {
     await call;
     expect(starts).toEqual([10_000]);
   });
+
+  it('runs a priority call ahead of queued background calls', async () => {
+    const limiter = make();
+    const order: string[] = [];
+    const mark = (name: string) => async () => void order.push(name);
+    const all = Promise.all([
+      limiter.schedule('slow', mark('poll-a')),
+      limiter.schedule('slow', mark('poll-b')),
+      limiter.schedule('slow', mark('poll-c')),
+    ]);
+    // Arrives while poll-a holds the slot and b, c are waiting.
+    await vi.advanceTimersByTimeAsync(1_000);
+    const verify = limiter.schedule('slow', mark('verify'), { priority: true });
+    await vi.runAllTimersAsync();
+    await Promise.all([all, verify]);
+    expect(order).toEqual(['poll-a', 'verify', 'poll-b', 'poll-c']);
+  });
+
+  it('a priority caller promotes a queued call it coalesces with', async () => {
+    const limiter = make();
+    const order: string[] = [];
+    const mark = (name: string) => async () => void order.push(name);
+    void limiter.schedule('slow', mark('first'));
+    await vi.advanceTimersByTimeAsync(1);
+    void limiter.schedule('slow', mark('other'));
+    const queued = limiter.schedule('slow', mark('lawn'), { coalesceKey: 'lawn' });
+    const promoted = limiter.schedule('slow', mark('never'), {
+      coalesceKey: 'lawn',
+      priority: true,
+    });
+    expect(promoted).toBe(queued);
+    await vi.runAllTimersAsync();
+    expect(order).toEqual(['first', 'lawn', 'other']);
+  });
+
+  it('reports the earliest scoped lane', async () => {
+    const limiter = make();
+    const t0 = Date.now();
+    expect(limiter.earliestAvailableAt('slow').getTime()).toBe(t0);
+    await limiter.schedule('slow', async () => {}, { scope: 'a' });
+    expect(limiter.earliestAvailableAt('slow').getTime()).toBe(t0 + 10_000);
+    vi.advanceTimersByTime(4_000);
+    await limiter.schedule('slow', async () => {}, { scope: 'b' });
+    expect(limiter.earliestAvailableAt('slow').getTime()).toBe(t0 + 10_000);
+  });
 });

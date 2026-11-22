@@ -1,0 +1,4 @@
+{
+  "result": "error",
+  "message": "The minimum interval of calling this API is 30 seconds."
+}

@@ -244,6 +244,20 @@ describe('SchedulerEngine', () => {
     expect(h.db.select().from(runs).all()).toHaveLength(0);
   });
 
+  it('an accepted but unconfirmed start is tracked and flagged, never re-sent', async () => {
+    const h = await setup();
+    await createSchedule(h);
+    vi.spyOn(h.executor, 'confirmStart').mockResolvedValueOnce('unknown');
+    await tickAt(h, 0);
+    expect(startCalls(h)).toHaveLength(1);
+    expect(planned(h)[0]).toMatchObject({ status: 'running', attempts: 1 });
+    const [run] = h.db.select().from(runs).all();
+    expect(run).toMatchObject({ status: 'running', source: 'hoseidon', plannedSec: 600 });
+    const ev = h.db.select().from(events).where(eq(events.type, 'schedule.run_unverified')).get();
+    expect(ev).toMatchObject({ severity: 'warn', deviceId: MOCK_IDS.frontLawn });
+    expect(ev?.title).toMatch(/couldn't confirm/);
+  });
+
   it('records no run when Stop lands after the start was verified', async () => {
     const h = await setup();
     await createSchedule(h);

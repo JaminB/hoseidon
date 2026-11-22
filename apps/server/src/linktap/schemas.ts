@@ -10,12 +10,25 @@ import { z } from 'zod';
 const num = z.union([z.number(), z.string()]).nullish();
 const flag = z.union([z.boolean(), z.number(), z.string()]).nullish();
 
+/**
+ * A live run. getWateringStatus (verified live, every value a STRING) sends
+ * { onDuration, onDurSec, total, totalSec, onStamp, firstDt, vel, vol, dur, cm, ... }:
+ * onDuration/total are whole minutes with onDurSec/totalSec as the seconds part, `dur` is the
+ * planned length in seconds, `onStamp` the run start (epoch ms), `vel` the flow (ml/min).
+ * After a run ends it sends just { dur } (idle, not watering). getAllDevices' `watering` is still
+ * the inferred { remaining, total, vel, vol } (minutes).
+ */
 export const rawWateringSchema = z.looseObject({
   remaining: num,
   total: num,
+  totalSec: num,
   onDuration: num,
+  onDurSec: num,
+  onStamp: num,
+  dur: num,
   vel: num,
   vol: num,
+  cm: z.string().nullish(),
 });
 export type RawWatering = z.infer<typeof rawWateringSchema>;
 

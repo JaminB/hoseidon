@@ -4,6 +4,7 @@ import { openDb } from './db';
 import { createLinkTapClient, type Bucket } from './linktap/client';
 import { LinkTapMock, type MockOptions } from './linktap/mock';
 import { Poller } from './poller';
+import { hasStartEvidence } from './poller/ingest';
 import { SchedulerEngine, type EngineOptions } from './schedule/engine';
 import { CloudExecutor } from './schedule/executor';
 import { AuthService } from './auth/service';
@@ -63,7 +64,12 @@ export function harness(
     WEBHOOK_SECRET: 's3cret',
     ...opts.env,
   });
-  const executor = new CloudExecutor({ client, verifyDelayMs: 0 });
+  const executor = new CloudExecutor({
+    client,
+    verifyDelayMs: 0,
+    recheckDelayMs: 0,
+    evidence: (d, since) => hasStartEvidence(db, d.id, since),
+  });
   const weather = new OpenMeteoProvider({ db, fetch: opts.weatherFetch ?? mockOpenMeteoFetch });
   const scheduler = new SchedulerEngine({ db, executor, ...opts.engine });
   const gcal = new GcalService({ db, config, timeZone: 'UTC', executor, ...opts.gcal });

@@ -21,6 +21,7 @@ export function pushCategory(type: string): PushCategory | null {
     case 'device.offline':
       return 'offline';
     case 'schedule.run_failed':
+    case 'schedule.run_unverified':
     case 'schedule.missed':
       return 'failed';
     case 'schedule.skipped':

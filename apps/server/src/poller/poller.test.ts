@@ -173,6 +173,110 @@ describe('Poller against the mock', () => {
     expect(openRun(h.db, MOCK_IDS.frontLawn)).toBeUndefined();
   });
 
+  it('running outlets take turns at the account-wide status limit', async () => {
+    const h = harness({ realLimits: true });
+    // Front Lawn is already running (seeded); start Drip A too, then let the poller see both.
+    await h.client.startWatering({
+      gatewayId: MOCK_IDS.backyard,
+      taplinkerId: MOCK_IDS.dripA,
+      seconds: 600,
+    });
+    await h.poller.pollDevices();
+    const polled = () =>
+      h.mock.calls.filter((c) => c.endpoint === 'getWateringStatus').map((c) => c.body.taplinkerId);
+
+    await h.poller.pollRunning();
+    expect(polled()).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(31_000);
+    await h.poller.pollRunning();
+    await vi.advanceTimersByTimeAsync(31_000);
+    await h.poller.pollRunning();
+    const seen = polled();
+    expect(seen).toHaveLength(3);
+    expect(new Set(seen.slice(0, 2))).toEqual(new Set([MOCK_IDS.frontLawn, MOCK_IDS.dripA]));
+    expect(seen[2]).toBe(seen[0]);
+    // The enforcing mock never had to reject a call.
+    expect(h.poller.status().last.status.error).toBeNull();
+  });
+
+  it('a rate-limited status poll is not a device failure', async () => {
+    const h = harness();
+    await h.poller.pollDevices();
+    const { LinkTapError } = await import('../linktap/client');
+    vi.spyOn(h.client, 'getWateringStatus').mockRejectedValueOnce(
+      new LinkTapError(
+        'getWateringStatus',
+        'The minimum interval of calling this API is 30 seconds.',
+        'rate_limit',
+      ),
+    );
+    await h.poller.pollRunning();
+    expect(h.poller.status().last.status.error).toBeNull();
+    // The run is untouched and the next tick polls it again.
+    expect(
+      h.db.select().from(runs).where(eq(runs.deviceId, MOCK_IDS.frontLawn)).get()?.status,
+    ).toBe('running');
+    await h.poller.pollRunning();
+    expect(h.mock.calls.filter((c) => c.endpoint === 'getWateringStatus')).toHaveLength(1);
+  });
+
+  it('closes a run on the post-run {"dur"} status and reconciles it from history', async () => {
+    const h = harness();
+    await h.poller.pollDevices();
+    vi.advanceTimersByTime(8 * 60_000); // the 10-minute lawn run (3 min in) is over
+    const reply = await h.mock.transport()('getWateringStatus', {
+      username: 'u',
+      apiKey: 'k',
+      gatewayId: MOCK_IDS.backyard,
+      taplinkerId: MOCK_IDS.frontLawn,
+    });
+    expect(reply).toEqual({ result: 'ok', status: { dur: '600' } });
+
+    await h.poller.pollRunning();
+    const run = () =>
+      h.db
+        .select()
+        .from(runs)
+        .where(eq(runs.deviceId, MOCK_IDS.frontLawn))
+        .all()
+        .find((r) => r.plannedSec === 600)!;
+    expect(run()).toMatchObject({ status: 'completed', volumeMl: null });
+    const lawn = h.db.select().from(devices).where(eq(devices.id, MOCK_IDS.frontLawn)).get();
+    expect(lawn?.watering).toBeNull();
+
+    expect(await h.poller.reconcileHistory(MOCK_IDS.frontLawn)).toBe(true);
+    expect(run()).toMatchObject({ status: 'completed', durationSec: 600, volumeMl: 38_000 });
+  });
+
+  it('when running, fetches history shortly after a status poll sees a run end', async () => {
+    const h = harness();
+    h.poller.start();
+    await vi.advanceTimersByTimeAsync(0); // first getAllDevices
+    vi.setSystemTime(Date.now() + 8 * 60_000);
+    const before = h.mock.calls.filter((c) => c.endpoint === 'getWateringHistory').length;
+    await h.poller.pollRunning();
+    await vi.advanceTimersByTimeAsync(5_000);
+    const history = h.mock.calls.filter((c) => c.endpoint === 'getWateringHistory');
+    expect(history.length).toBe(before + 1);
+    expect(history.at(-1)?.body.taplinkerId).toBe(MOCK_IDS.frontLawn);
+    h.poller.stop();
+  });
+
+  it('a null status in the first minute after a start does not close the run (start latency)', async () => {
+    const h = harness();
+    await h.poller.pollDevices();
+    const { ingestWateringStatus, openRun, recordStart, START_GRACE_MS } = await import('./ingest');
+    h.db.transaction((tx) =>
+      recordStart(tx, { deviceId: MOCK_IDS.dripA, seconds: 60, now: new Date() }),
+    );
+    vi.advanceTimersByTime(12_000);
+    ingestWateringStatus(h.db, MOCK_IDS.dripA, null, new Date());
+    expect(openRun(h.db, MOCK_IDS.dripA)).toBeDefined();
+    vi.advanceTimersByTime(START_GRACE_MS);
+    expect(ingestWateringStatus(h.db, MOCK_IDS.dripA, null, new Date())).toEqual({ closed: true });
+    expect(openRun(h.db, MOCK_IDS.dripA)).toBeUndefined();
+  });
+
   it('records errors without throwing', async () => {
     const h = harness();
     h.mock.handle = () => ({ result: 'error', message: 'nope' });

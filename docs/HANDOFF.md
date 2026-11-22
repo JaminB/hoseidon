@@ -448,4 +448,48 @@ First real captures changed several assumptions; see "Verified against live API"
   marks pre-existing locations manual.
 - New stored fields: gateway `version`, device `dType`/`flowMeter`/`flowMlPerMin`/`plan`, snapshot
   `flowMlPerMin`, run `mode`. Flow analytics are hidden when `flowMeter === false`.
-- Still unverified: `WATERING_TIME_UNIT_SEC` (no running outlet captured yet).
+- `WATERING_TIME_UNIT_SEC` (minutes) is now verified; see the next section.
+
+## First live watering test (2026-11-22)
+
+Real 1-minute instant runs on a 4-outlet ValveLinker. Details in `docs/linktap-api.md`
+("Verified against live API" and "How Hoseidon uses it"); sanitized fixtures
+`getWateringStatus.{running,finished,rate-limited}.json`.
+
+- `getWateringStatus` is limited to one call per 30 s ("The minimum interval of calling this API
+  is 30 seconds."). The status bucket is now account-wide at 31 s (`LINKTAP_LIMITS`), the
+  conservative reading; the log also fits a per-taplinker limit, see the doc. History is now
+  limited per taplinker (`PER_TAPLINKER_BUCKETS`); `nextAvailableAt('history')` without an id
+  reports the earliest lane.
+- `RateLimiter` was rewritten around an explicit queue: `priority` calls jump queued ones (and a
+  priority caller promotes a queued call it coalesces with); bookkeeping happens before the caller
+  sees the result. `earliestAvailableAt(bucket)` added.
+- Rate-limit errors are `LinkTapError` kind `rate_limit` (`isRateLimitError`). The poller treats
+  them as "try next tick", not a failure.
+- Running status: all strings; remaining = `onStamp` + `dur` - now (`onDuration` does not count
+  down); `vol` "0" while running = unknown. Post-run status is `{dur}` and counts as idle
+  (`isWateringStatus`).
+- Poller: status polls take running outlets in turn (one per tick); a run closed by a status poll
+  triggers `reconcileHistory(deviceId)` 5 s later (only while `start()`ed). `START_GRACE_MS` is
+  now 60 s. `ingestWateringStatus` returns `{ closed }`.
+- Executor: `Executor.confirmStart(device, sentAt)` returns `watering | idle | unknown` (first
+  check after 20 s, second about 30 s later, then DB evidence via `hasStartEvidence` and a free
+  history slot). `startVerified(executor, device, seconds, opts)` now takes an options object and
+  returns `{ attempts, verified, startedAt, note }`; it re-sends only on `idle` twice within the
+  first half of the planned run, and re-sends rate-limited starts. The engine records an
+  unverified start as running with a `schedule.run_unverified` event (push "failed"), and uses
+  the start's send time as the run's `startedAt`.
+- Client bodies match the live ones: start sends `durationSec` only when non-zero and `eco*` only
+  for cycle-and-soak; stop is exactly `{gatewayId, taplinkerId, action:false, duration:0}`.
+- Mock: `MOCK_API_LIMITS` (status 30 s account-wide with the live message, history per
+  taplinker), live string-valued status, `{dur}` after a run, `startLatencyMs`, and commands answer
+  `{"result":"ok","message":"success"}`.
+
+**Known gaps**
+
+- A scheduled start now holds the engine for 20 s (happy path) to about 50 s (unhappy path), and
+  starts are sequential, so parallel zones start further apart than before.
+- The status limit scope (account vs taplinker) and whether a rejected call resets LinkTap's
+  window are not settled. `autoBack: true` (Hoseidon's default) was not exercised live.
+- The running `watering` shape inside `getAllDevices` is still unseen.
+- Manual "Run now" (`POST /devices/:id/run`) still does not verify the start.
