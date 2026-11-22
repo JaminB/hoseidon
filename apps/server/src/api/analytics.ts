@@ -74,7 +74,9 @@ export function analyticsRoutes({ db, weather, timeZone }: AnalyticsApiDeps) {
     const name = row.device.name ?? row.device.linktapName;
     const analytics: Analytics = analyze(db, [{ id: row.device.id, name }], from, to, tz);
     // The per-device breakdown is only meaningful for the summary.
-    return c.json({ ...analytics, devices: undefined });
+    // No flow meter fitted (flowMeterStatus != on): never show flow, whatever the history says.
+    const hasFlow = analytics.hasFlow && row.device.flowMeter !== false;
+    return c.json({ ...analytics, hasFlow, devices: undefined });
   });
 
   api.get('/analytics/summary', (c) => {

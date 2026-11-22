@@ -432,3 +432,20 @@ Fixed (all with regression tests):
 - Web: week view fits its hour range to the scheduled blocks ("Show full day" toggle) and shows compact dot + time chips in narrow lanes; Home tile is "Finished today", Skip is always visible; ET0 has its own hidden scale; flow axis shows the unit once; Network collapses timers with fewer than 2 samples into one row.
 
 Known gaps: webhook `wateringOn` adoption is a 60 s heuristic; Devices-page plan-conflict banner does not yet link to the zone; analytics heatmap sizing not changed.
+
+## Live API shapes (2026-11-22)
+
+First real captures changed several assumptions; see "Verified against live API" in
+`docs/linktap-api.md` and the sanitized fixtures in `apps/server/src/linktap/fixtures/`.
+
+- Fall alarm is `fall` (mapped to `fallFlag`); `signal` is numeric; `getWateringHistory` returns
+  its records under `status`, timestamped at the run END with an optional trustworthy `createdAt`
+  (used only within 2 minutes of the local conversion). Zero-length entries are dropped.
+- Gateway `location` (Plus Code + locality) is resolved to lat/lon/timezone by
+  `linktap/location.ts` (Open-Meteo geocoding + `open-location-code`) after each device poll, only
+  when the string changes and `gateways.location_source` is not `manual`. Saving a location in the
+  UI sets `manual`; `PATCH /api/gateways/:id {useLinktapLocation:true}` reverts. Migration 0005
+  marks pre-existing locations manual.
+- New stored fields: gateway `version`, device `dType`/`flowMeter`/`flowMlPerMin`/`plan`, snapshot
+  `flowMlPerMin`, run `mode`. Flow analytics are hidden when `flowMeter === false`.
+- Still unverified: `WATERING_TIME_UNIT_SEC` (no running outlet captured yet).

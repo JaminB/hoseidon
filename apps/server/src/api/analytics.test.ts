@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Analytics, AnalyticsSummary, WeatherResponse } from '@hoseidon/shared';
 import { MOCK_IDS } from '../linktap/mock';
-import { gateways, plannedRuns, runs, schedules } from '../db/schema';
+import { devices, gateways, plannedRuns, runs, schedules } from '../db/schema';
 import { harness } from '../test-utils';
 
 // Noon UTC on 2026-06-10; the harness runs in UTC.
@@ -109,6 +109,14 @@ describe('GET /api/analytics/devices/:id', () => {
     const { body } = await get<Analytics>(`/analytics/devices/${ID}?from=2026-06-08&to=2026-06-09`);
     expect(body.timezone).toBe('America/New_York');
     expect(body.days.map((d) => d.runs)).toEqual([1, 0]);
+  });
+
+  it('hides flow when LinkTap says no flow meter is fitted', async () => {
+    const { get, run, db } = await setup();
+    run(ID, '2026-06-09T06:00:00Z', 600, 1000);
+    db.update(devices).set({ flowMeter: false }).run();
+    const { body } = await get<Analytics>(`/analytics/devices/${ID}?from=2026-06-09&to=2026-06-09`);
+    expect(body.hasFlow).toBe(false);
   });
 
   it('hides flow gracefully when no run reported a volume', async () => {

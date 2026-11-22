@@ -12,6 +12,12 @@ import { GcalService, type GcalOptions } from './gcal/service';
 import { mockOpenMeteoFetch } from './weather/mock';
 import { OpenMeteoProvider } from './weather/open-meteo';
 
+/** Geocoding that finds nothing, so existing tests keep gateways without a location. */
+const noGeocodeFetch: typeof fetch = async () =>
+  new Response(JSON.stringify({ results: [] }), {
+    headers: { 'content-type': 'application/json' },
+  });
+
 const NO_LIMITS: Record<Bucket, { intervalMs: number }> = {
   devices: { intervalMs: 0 },
   status: { intervalMs: 0 },
@@ -34,6 +40,8 @@ export function harness(
     /** Turn real session checks on (they are off by default so route tests need no login). */
     auth?: boolean;
     pushSend?: PushSender;
+    /** fetch used to geocode LinkTap's gateway location; default finds nothing. */
+    geocode?: typeof fetch;
   } = {},
 ) {
   const { db, sqlite } = openDb(':memory:');
@@ -48,7 +56,7 @@ export function harness(
     transport: mock.transport(),
     limits: opts.realLimits ? undefined : NO_LIMITS,
   });
-  const poller = new Poller({ db, client, timeZone: 'UTC' });
+  const poller = new Poller({ db, client, timeZone: 'UTC', fetch: opts.geocode ?? noGeocodeFetch });
   const config = loadConfig({
     LINKTAP_MOCK: 'true',
     WEB_DIST: './nonexistent',

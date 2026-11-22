@@ -185,6 +185,7 @@ export function buildNetwork(
         name: gName,
         online: g.online,
         lastSeenAt: g.lastSeenAt?.toISOString() ?? null,
+        version: g.version ?? null,
         uptimePct: round1(gTimeline.uptimePct),
         segments: toSegments(gTimeline.segments),
         devices: devicesOut,

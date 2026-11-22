@@ -36,6 +36,13 @@
       "when": 1795315988557,
       "tag": "0004_auth_push",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "6",
+      "when": 1795350136981,
+      "tag": "0005_live_api_shapes",
+      "breakpoints": true
     }
   ]
 }

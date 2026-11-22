@@ -163,6 +163,8 @@ export const api = {
       lat?: number | null;
       lon?: number | null;
       timezone?: string | null;
+      /** Drop a manual location and follow LinkTap's again. */
+      useLinktapLocation?: true;
     },
   ) => request(`/gateways/${id}`, gatewaySchema, { method: 'PATCH', body: patch }),
   patchDevice: (id: string, patch: { name?: string | null; zone?: string | null }) =>

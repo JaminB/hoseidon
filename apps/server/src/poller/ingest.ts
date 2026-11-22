@@ -57,6 +57,8 @@ export function ingestDevices(db: Db, polled: NormalizedGateway[], now: Date): N
         status: gw.status,
         online: gw.online,
         raw: gw.raw,
+        version: gw.version,
+        locationRaw: gw.location,
         updatedAt: now,
         ...(gw.online ? { lastSeenAt: now } : {}),
       };
@@ -101,6 +103,10 @@ export function ingestDevices(db: Db, polled: NormalizedGateway[], now: Date): N
           workMode: t.workMode,
           alarms: t.alarms,
           watering: t.watering,
+          dType: t.dType,
+          flowMeter: t.flowMeter,
+          flowMlPerMin: t.flowMlPerMin,
+          plan: t.plan,
           updatedAt: now,
           ...(online ? { lastSeenAt: now } : {}),
         };
@@ -119,6 +125,7 @@ export function ingestDevices(db: Db, polled: NormalizedGateway[], now: Date): N
             signalPct: t.signalPct,
             workMode: t.workMode,
             watering: t.watering !== null,
+            flowMlPerMin: t.flowMlPerMin,
             alarms: t.alarms,
             raw: t.raw,
           })
@@ -411,7 +418,7 @@ export function ingestHistory(
   let updated = 0;
   db.transaction((tx) => {
     for (const e of entries) {
-      const endedAt = new Date(e.startedAt.getTime() + e.durationSec * 1000);
+      const endedAt = e.endedAt;
       // Skip a record that is still in progress; the status poller owns it.
       if (endedAt > now) continue;
       // Closest-starting run in the window that doesn't start after this record ended.
@@ -447,6 +454,7 @@ export function ingestHistory(
             endedAt,
             durationSec: e.durationSec,
             volumeMl: e.volumeMl,
+            mode: e.mode,
             status: match.status === 'running' ? 'completed' : match.status,
           })
           .where(eq(runs.id, match.id))
@@ -461,6 +469,7 @@ export function ingestHistory(
             plannedSec: null,
             durationSec: e.durationSec,
             volumeMl: e.volumeMl,
+            mode: e.mode,
             source: 'linktap',
             status: 'completed',
           })

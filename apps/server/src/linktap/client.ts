@@ -191,7 +191,7 @@ export function createLinkTapClient(opts: ClientOptions): LinkTapClient {
         'getWateringHistory',
         async () => {
           const res = await call('getWateringHistory', ids(ref), getWateringHistorySchema);
-          return normalizeHistory(res.history ?? res.data ?? [], timeZone);
+          return normalizeHistory(res.status ?? res.history ?? res.data ?? [], timeZone);
         },
         // Normalization depends on the time zone, so it is part of the key.
         { coalesceKey: `${ref.taplinkerId.trim()}|${timeZone}` },

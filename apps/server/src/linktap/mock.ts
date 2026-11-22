@@ -34,6 +34,8 @@ interface MockTaplinker {
 interface MockGateway {
   id: string;
   name: string;
+  /** What LinkTap shows as the gateway `location`. */
+  location: string;
   status: 'Connected' | 'Disconnected';
   taplinkers: MockTaplinker[];
 }
@@ -137,6 +139,7 @@ export class LinkTapMock {
       {
         id: MOCK_IDS.backyard,
         name: 'Backyard Gateway',
+        location: 'CWC8+R9 Mountain View, CA, USA',
         status: 'Connected',
         taplinkers: [
           tl(MOCK_IDS.frontLawn, 'Front Lawn', { battery: 84, signal: 72 }),
@@ -153,6 +156,7 @@ export class LinkTapMock {
       {
         id: MOCK_IDS.garage,
         name: 'Garage Gateway',
+        location: 'Not specified',
         status: 'Connected',
         taplinkers: [
           tl(MOCK_IDS.sideYard, 'Side Yard', { battery: 51, signal: 18, workMode: 'T' }),
@@ -253,7 +257,8 @@ export class LinkTapMock {
       case 'getWateringStatus':
         return { result: 'ok', status: taplinker.run ? this.renderWatering(taplinker) : null };
       case 'getWateringHistory':
-        return { result: 'ok', history: this.renderHistory(taplinker) };
+        // Real API: the records are under `status`.
+        return { result: 'ok', status: this.renderHistory(taplinker) };
     }
 
     // Everything below is a command and needs the device reachable.
@@ -383,30 +388,60 @@ export class LinkTapMock {
     return {
       gatewayId: g.id,
       name: g.name,
-      location: 'Home',
+      location: g.location,
       status: g.status,
-      version: 'S1.2.3',
+      version: 'G0609472606040836I_C0502012507221443',
       taplinker: g.taplinkers.map((t) => {
         const reachable = g.status === 'Connected' && t.status === 'Connected';
         return {
           taplinkerId: t.id,
           taplinkerName: t.name,
-          location: 'Home',
+          location: 'Not specified',
           status: reachable ? 'Connected' : 'Disconnected',
+          flowMeterStatus: t.flow === null ? 'off' : 'on',
+          // Multi-outlet ValveLinkers report device type 16.
+          ...(t.id.includes('_') ? { dType: 16 } : {}),
           batteryStatus: `${t.battery}%`,
-          signal: `${reachable ? t.signal : 0}%`,
           workMode: t.workMode,
+          // Idle outlets still have a plan (the last instant run) unless they never had one.
+          ...(t.workMode === 'N' ? {} : { plan: this.renderPlan(t) }),
           watering: this.renderWatering(t),
-          noWater: t.alarms.has('noWater'),
+          // Real API: `vel` is top-level, the last/current flow in ml/min (0 when idle).
+          vel: t.run ? (t.flow ?? 0) : 0,
+          // Real API: the fall alarm is `fall`. pcFlag/pbFlag only appear on some firmware.
+          fall: t.alarms.has('fallFlag'),
           valveBroken: t.alarms.has('valveBroken'),
-          fallFlag: t.alarms.has('fallFlag'),
+          noWater: t.alarms.has('noWater'),
           leakFlag: t.alarms.has('leakFlag'),
           clogFlag: t.alarms.has('clogFlag'),
-          pcFlag: t.alarms.has('pcFlag'),
-          pbFlag: t.alarms.has('pbFlag'),
-          freezeFlag: t.alarms.has('freezeFlag'),
+          ...(t.alarms.has('pcFlag') ? { pcFlag: true } : {}),
+          ...(t.alarms.has('pbFlag') ? { pbFlag: true } : {}),
+          ...(t.alarms.has('freezeFlag') ? { freezeFlag: true } : {}),
+          // Real API: a number, not "88%".
+          signal: reachable ? t.signal : 0,
         };
       }),
+    };
+  }
+
+  private renderPlan(t: MockTaplinker) {
+    const last = t.history[t.history.length - 1];
+    const d = new Date(last?.startedAt ?? this.now());
+    return {
+      action: false,
+      duration: last ? Math.round(last.durationSec / 60) : 0,
+      Y: d.getUTCFullYear(),
+      X: d.getUTCMonth() + 1,
+      Z: d.getUTCDate(),
+      H: d.getUTCHours(),
+      M: d.getUTCMinutes(),
+      eco: false,
+      ecoOn: 1,
+      ecoOff: 1,
+      ecoOnS: 0,
+      ecoOffS: 0,
+      wType: 'd',
+      multi: false,
     };
   }
 
@@ -425,17 +460,23 @@ export class LinkTapMock {
     return t.history
       .filter((h) => h.startedAt >= cutoff)
       .map((h) => {
+        // Real API: the date/time is when the run ENDED, in gateway-local time.
+        const endedAt = h.startedAt + h.durationSec * 1000;
         const p = Object.fromEntries(
-          fmt.formatToParts(new Date(h.startedAt)).map((x) => [x.type, x.value]),
+          fmt.formatToParts(new Date(endedAt)).map((x) => [x.type, x.value]),
         );
         return {
+          macaddr: t.id,
           Y: `${p.year}${p.month}${p.day}`,
           H: Number(p.hour),
           M: Number(p.minute),
           ss: Number(p.second),
           D: Math.floor(h.durationSec / 60),
           S: h.durationSec % 60,
-          vol: h.volumeMl,
+          vol: h.volumeMl ?? 0,
+          cm: 'M',
+          createdAt: new Date(endedAt).toISOString(),
+          __v: 0,
         };
       });
   }

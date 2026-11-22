@@ -30,6 +30,9 @@ export function toGateway(row: GatewayRow): Gateway {
     lat: row.lat,
     lon: row.lon,
     timezone: row.timezone,
+    locationSource: row.locationSource ?? null,
+    linktapLocation: row.locationRaw ?? null,
+    version: row.version ?? null,
     lastSeenAt: iso(row.lastSeenAt),
     updatedAt: row.updatedAt.toISOString(),
   };
@@ -50,6 +53,9 @@ export function toDevice(row: DeviceRow): Device {
     workMode: row.workMode,
     alarms: row.alarms,
     watering: row.watering ?? null,
+    dType: row.dType ?? null,
+    flowMeter: row.flowMeter ?? null,
+    flowMlPerMin: row.flowMlPerMin ?? null,
     lastSeenAt: iso(row.lastSeenAt),
     updatedAt: row.updatedAt.toISOString(),
   };
@@ -80,6 +86,7 @@ export function toRun(row: RunRow): Run {
     scheduleId: row.scheduleId,
     status: row.status,
     note: row.note,
+    mode: row.mode ?? null,
   };
 }
 

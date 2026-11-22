@@ -62,13 +62,23 @@ export function isPlanMode(mode: WorkMode | null): boolean {
   return mode !== null && mode !== 'M' && mode !== 'N';
 }
 
+export function isOn(status: string | null | undefined): boolean {
+  return typeof status === 'string' && status.trim().toLowerCase() === 'on';
+}
+
+function cleanLocation(value: string | null | undefined): string | null {
+  const s = value?.trim();
+  return s && s.toLowerCase() !== 'not specified' ? s : null;
+}
+
 export function isConnected(status: string | null | undefined): boolean {
   return typeof status === 'string' && status.trim().toLowerCase() === 'connected';
 }
 
 /**
  * Watering durations (`remaining`, `total`, `onDuration`) are reported in minutes as far as the
- * community integrations show. UNVERIFIED: confirm during the live smoke test and change here.
+ * community integrations show. STILL UNVERIFIED for a running outlet (the 2026-11-22 capture was
+ * idle, so `watering` was null); confirm during a live run and change here.
  */
 export const WATERING_TIME_UNIT_SEC = 60;
 
@@ -99,6 +109,14 @@ export interface NormalizedTaplinker {
   signalPct: number | null;
   workMode: WorkMode | null;
   watering: Watering | null;
+  /** Raw LinkTap device type (16 = 4-outlet ValveLinker). */
+  dType: number | null;
+  /** flowMeterStatus === "on"; null when the field is absent. */
+  flowMeter: boolean | null;
+  /** Top-level `vel` (ml/min): last/current flow, reported even when idle. */
+  flowMlPerMin: number | null;
+  /** Last instant-mode plan LinkTap reports. */
+  plan: Record<string, unknown> | null;
   alarms: AlarmFlag[];
   raw: RawTaplinker;
 }
@@ -108,6 +126,10 @@ export interface NormalizedGateway {
   name: string;
   status: string | null;
   online: boolean;
+  /** Firmware version string. */
+  version: string | null;
+  /** Raw location string (Google Plus Code + locality), null when blank/"Not specified". */
+  location: string | null;
   taplinkers: NormalizedTaplinker[];
   raw: Omit<RawGateway, 'taplinker'>;
 }
@@ -127,7 +149,15 @@ export function normalizeTaplinker(raw: RawTaplinker, gatewayId: string): Normal
     signalPct: parsePercent(raw.signal),
     workMode: toWorkMode(raw.workMode),
     watering: normalizeWatering(raw.watering),
-    alarms: ALARM_FLAGS.filter((flag) => toFlag(raw[flag])),
+    dType: toNumber(raw.dType),
+    flowMeter: typeof raw.flowMeterStatus === 'string' ? isOn(raw.flowMeterStatus) : null,
+    flowMlPerMin: toNumber(raw.vel) ?? toNumber(raw.watering?.vel),
+    plan: raw.plan ?? null,
+    // The live API calls the fall alarm `fall`; older docs say `fallFlag`. pcFlag/pbFlag are
+    // only sent by some firmware, so absent means not raised.
+    alarms: ALARM_FLAGS.filter(
+      (flag) => toFlag(raw[flag]) || (flag === 'fallFlag' && toFlag(raw.fall)),
+    ),
     raw,
   };
 }
@@ -140,6 +170,8 @@ export function normalizeGateway(raw: RawGateway): NormalizedGateway {
     name: raw.name?.trim() || id,
     status: raw.status ?? null,
     online: isConnected(raw.status),
+    version: raw.version?.trim() || null,
+    location: cleanLocation(raw.location),
     taplinkers: (taplinker ?? []).map((t) => normalizeTaplinker(t, id)),
     raw: rest,
   };
@@ -148,10 +180,18 @@ export function normalizeGateway(raw: RawGateway): NormalizedGateway {
 // ---- History ------------------------------------------------------------------------------------
 
 export interface HistoryEntry {
+  /** End time minus duration. */
   startedAt: Date;
+  /** The record's timestamp is when the run ENDED. */
+  endedAt: Date;
   durationSec: number;
   volumeMl: number | null;
+  /** LinkTap work mode (`cm`), e.g. "M"; null when absent. */
+  mode: string | null;
 }
+
+/** createdAt is trusted for the end time only when it agrees with the local time this closely. */
+export const CREATED_AT_TOLERANCE_MS = 120_000;
 
 /** Offset (ms) of `timeZone` from UTC at instant `ms`. */
 function tzOffsetMs(ms: number, timeZone: string): number {
@@ -195,8 +235,11 @@ export function zonedTimeToDate(
 }
 
 /**
- * History records are { Y: "YYYYMMDD", H, M, ss, D: minutes, S: seconds, vol: ml } in the
- * gateway's local time. Malformed records are dropped.
+ * History records are { Y: "YYYYMMDD", H, M, ss, D: minutes, S: seconds, vol: ml, cm?, createdAt }.
+ * The date/time is when the run ENDED, in the gateway's local time. `createdAt` (ISO UTC) is
+ * more precise but is sometimes batched in days after the event, so it is used only when it is
+ * within two minutes of the local time. Runs with no duration are dropped. Malformed records
+ * are dropped too.
  */
 export function normalizeHistory(entries: RawHistoryEntry[], timeZone: string): HistoryEntry[] {
   const out: HistoryEntry[] = [];
@@ -209,7 +252,7 @@ export function normalizeHistory(entries: RawHistoryEntry[], timeZone: string): 
     // Date.UTC silently rolls Feb 30 into March; reject dates that don't round-trip.
     const check = new Date(Date.UTC(y, mo - 1, d));
     if (check.getUTCMonth() !== mo - 1 || check.getUTCDate() !== d) continue;
-    const startedAt = zonedTimeToDate(
+    const localEnd = zonedTimeToDate(
       y,
       mo,
       d,
@@ -218,11 +261,28 @@ export function normalizeHistory(entries: RawHistoryEntry[], timeZone: string): 
       toNumber(e.ss) ?? 0,
       timeZone,
     );
-    if (Number.isNaN(startedAt.getTime())) continue;
+    if (Number.isNaN(localEnd.getTime())) continue;
     const durationSec = (toNumber(e.D) ?? 0) * 60 + (toNumber(e.S) ?? 0);
-    out.push({ startedAt, durationSec, volumeMl: toNumber(e.vol) });
+    if (durationSec <= 0) continue;
+    let endedAt = localEnd;
+    if (e.createdAt) {
+      const created = new Date(e.createdAt);
+      if (
+        !Number.isNaN(created.getTime()) &&
+        Math.abs(created.getTime() - localEnd.getTime()) <= CREATED_AT_TOLERANCE_MS
+      ) {
+        endedAt = created;
+      }
+    }
+    out.push({
+      startedAt: new Date(endedAt.getTime() - durationSec * 1000),
+      endedAt,
+      durationSec,
+      volumeMl: toNumber(e.vol),
+      mode: e.cm?.trim() || null,
+    });
   }
-  return out.sort((a, b) => a.startedAt.getTime() - b.startedAt.getTime());
+  return out.sort((a, b) => a.endedAt.getTime() - b.endedAt.getTime());
 }
 
 /** Split a duration in seconds into LinkTap's (minutes, seconds) pair for activateInstantMode. */

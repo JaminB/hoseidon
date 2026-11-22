@@ -284,6 +284,9 @@ export function usePatchGateway() {
             ? {
                 ...g,
                 ...patch,
+                ...(patch.lat != null || patch.lon != null
+                  ? { locationSource: 'manual' as const }
+                  : {}),
                 name: patch.name === undefined ? g.name : (patch.name ?? g.linktapName),
               }
             : g,
