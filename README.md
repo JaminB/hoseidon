@@ -24,7 +24,9 @@ keeps your lawn alive without a single "Oops, something went wrong" toast.
 - [x] Monorepo scaffold, Docker image, CI
 - [x] A mock LinkTap server so you can develop without flooding your yard
 - [x] LinkTap client with a rate-limit queue, a poller, a webhook receiver and a REST API
-- [ ] Device and network monitoring (gateways, timers, battery, signal, alarms)
+- [x] A calm, minimal web app (light and dark): Today timeline with live countdowns, device cards
+      with battery, signal, alarms and one-tap quick runs, and a drag-to-create week calendar
+- [ ] Network monitoring over time (uptime, signal history, battery drain, a Diagnose panel)
 - [x] A real scheduler engine: RRULE-based and DST-safe, one zone at a time per gateway,
       cycle-and-soak, skip rules, verified starts, and quick add ("every other day 6am front lawn 15m")
 - [ ] Weather-driven skips (rain, freeze, wind) and ET₀ scaling (the rules exist; the forecast
@@ -49,6 +51,11 @@ pnpm dev                 # server on :8787, web on :5173 (proxies /api)
 ```
 
 Other scripts: `pnpm lint`, `pnpm typecheck`, `pnpm test`, `pnpm build`.
+
+Visual smoke test (Playwright): `pnpm --filter @hoseidon/web exec playwright install chromium`
+once, then `pnpm --filter @hoseidon/web e2e`. It boots its own mock server and dev server on
+ports 8797 and 5179, seeds a few schedules, and saves screenshots of every page (phone and
+desktop, light and dark) to `apps/web/e2e/__screenshots__/`. CI uploads them as an artifact.
 
 ## Running with Docker
 

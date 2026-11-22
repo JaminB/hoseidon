@@ -1,4 +1,9 @@
-import { RRule } from 'rrule';
+import * as rrule from 'rrule';
+
+// rrule ships a UMD "main" and an ESM "module". Bundlers (tsup, vitest) pick the ESM build with
+// named exports; plain Node (tsx in dev) loads the UMD build, which only has a default export.
+const { RRule } = (rrule as typeof rrule & { default?: typeof rrule }).default ?? rrule;
+type RRule = rrule.RRule;
 import { fromWall, parseLocal, toWall } from './time';
 
 export interface Recurrence {

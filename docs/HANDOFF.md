@@ -185,3 +185,71 @@
   models yet.
 - `runs.schedule_id` still has no FK, so a deleted schedule leaves its id on past runs.
 - When a schedule is deleted, its planned runs cascade away, including any that are running.
+
+## Phase 3: Design system, app shell, Home, Devices, Schedule (web)
+
+**What exists** (`apps/web/src`)
+
+- Design tokens in `index.css`. Semantic colors are CSS variables (`--app-*`) redefined under
+  `[data-theme='dark']` and exposed through `@theme inline` as Tailwind colors: `bg`, `surface`,
+  `surface-2/3`, `line`, `line-strong`, `fg`, `muted`, `subtle`, `accent`, `accent-strong`,
+  `accent-soft`, `accent-fg`, `ok`, `warn`, `warn-strong`, `danger` (+ `-soft`). Radii, shadows
+  (`shadow-xs..lg`), easing and keyframe animations (`animate-fade-in`, `sheet-*`, `pop-in`,
+  `toast-in`, `shimmer`, `ripple`) live there too. Geist / Geist Mono are self-hosted via
+  `@fontsource-variable`. `prefers-reduced-motion` turns animation off globally. `tnum` is a
+  utility for tabular numbers.
+- Theme: `lib/theme.ts` (`system | light | dark`, stored in localStorage, applied as
+  `html[data-theme]`; an inline script in `index.html` sets it before first paint). Dark mode in
+  Tailwind is `dark:` via a custom variant on `data-theme`, not the media query.
+- Components (`components/ui/`): Button (variants primary/secondary/ghost/soft/danger,
+  `asChild`, `loading`), Card/CardHeader/SectionLabel, Badge/Dot, Sheet (Radix Dialog: bottom
+  sheet on phones, right panel on desktop), ConfirmDialog (Radix AlertDialog), Tabs/Segmented,
+  Switch, Toast (`toast()`, `toast.success/error`, Radix Toast), Skeleton, Stat, EmptyState,
+  Field/Input/inputClass, Kbd, and `indicators.tsx` with BatteryIcon, SignalBars, CountdownRing.
+  Icons are lucide-react. `components/logo.tsx` has the trident mark (also the new favicon).
+- Layout: `components/layout/app-shell.tsx` (sidebar ≥ md, bottom tab bar on phones; `NAV`,
+  `Page`, `PageHeader`, `ThemeToggle`). Routes in `App.tsx`; pages other than Home are lazy.
+- Data: `lib/api.ts` is the typed client (zod-parsed with the shared DTO schemas; throws
+  `ApiError` with the server's `error` text) plus `geocode()` for Open-Meteo. `lib/queries.ts`
+  has the TanStack Query keys and hooks. Device commands, renames, alarm dismissals and
+  schedule edits/deletes are optimistic with rollback + toast. Gateways poll every 60 s (10 s
+  while anything waters), planned runs every 30 s.
+- Pages: `pages/home.tsx` (stats, running-now countdown rings with Stop, Today timeline from
+  `/api/planned-runs` with skip reasons, Skip button, quick run, needs-attention list),
+  `pages/devices.tsx` (gateway cards, nested timers, alarms with one-tap dismiss, LinkTap-plan
+  conflict banner, quick run 5/10/15, device sheet for name/zone, gateway sheet for name and
+  location via geolocation or ZIP/city search), `pages/schedule.tsx` (quick-add bar with live
+  client-side parse, templates, Week/List tabs, rolling 7-day week (3 days on phones) with
+  drag-to-create, lane layout for overlaps and red outline for `overlapsWith`, schedule sheet
+  for create/edit/delete), `pages/settings.tsx` (theme, LinkTap rate-limit status, about),
+  `pages/placeholders.tsx` (Analytics, Network).
+- Pure logic with tests: `lib/calendar.ts` (day math, drag snapping, `layoutDay` lanes,
+  `describeRrule`), `lib/repeat.ts` (repeat picker <-> RRULE), `lib/format.ts`, `lib/linktap.ts`.
+  `lib/schedule-draft.ts` holds the sheet's draft model, colors and TEMPLATES.
+- Playwright smoke test: `apps/web/e2e/smoke.spec.ts` + `playwright.config.ts`. It starts the
+  server with tsx (mock LinkTap, temp SQLite, port 8797) and Vite (port 5179, `HOSEIDON_API`
+  points the proxy at it), seeds 5 schedules, and screenshots 6 pages × 390/1440 × light/dark plus
+  a few interactions into `e2e/__screenshots__` (gitignored). CI job `e2e` runs it and uploads the
+  screenshots as an artifact. The e2e folder has its own tsconfig (node types).
+- Server fix: `schedule/occurrences.ts` imports rrule as a namespace with a `default` fallback, so
+  `pnpm dev` (tsx, plain Node) works. Before this the dev server crashed on boot.
+
+**Conventions**
+
+- Use the semantic color utilities, never raw palette colors, so both themes keep working.
+  Schedule colors are user data (hex) and are mixed with `color-mix()` against surface/fg.
+- New pages: wrap in `<Page>` + `<PageHeader>`; add to `NAV` and `App.tsx` (lazy).
+- New server calls go in `lib/api.ts` (parse with a shared schema) and get a hook in
+  `lib/queries.ts`. Mutations toast their errors.
+- Week view/time math is in the browser's local zone. New schedules get the browser zone.
+
+**Known gaps**
+
+- No weather strip on Home yet (phase 4); skip-rule fields exist in the sheet and note they need
+  a gateway location. Analytics and Network are placeholders.
+- The week view only shows occurrences from the preview API (from each schedule's
+  `effectiveFrom`), so past days don't show what actually ran. A runs overlay would fix it.
+- Touch: tapping an empty slot creates a 30 min block; there's no touch drag (it would fight
+  scrolling). Blocks can't be dragged to move/resize yet.
+- Quick-add creates directly when the parse is clean; ambiguous zone names need the sheet.
+- PWA icons are still SVG only; no offline data cache beyond the app shell.
