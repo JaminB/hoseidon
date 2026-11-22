@@ -321,3 +321,71 @@
 - No retention/pruning of `device_snapshots` (~288 rows/device/day); 30-day windows read ~9k rows each.
 - A timer offline for the whole window shows an incident starting at the window edge.
 - LinkTap exposes no extender/mesh data, so the topology is always gateway-to-timer.
+
+## Phase 6: Google Calendar one-way sync
+
+**What exists**
+
+- `server/src/gcal/` (details in `docs/gcal.md`):
+  - `oauth.ts`: auth URL (PKCE S256, `state`, `access_type=offline`, `prompt=consent`, scope
+    `calendar.app.created`), code exchange, refresh, revoke, and `TokenSource`, which caches the
+    access token and refreshes it 60 s before expiry. `GoogleAuthError.invalidGrant`.
+  - `crypto.ts`: `SecretBox`, AES-256-GCM with an HKDF key from `SESSION_SECRET`. The format is
+    `v1.<iv>.<tag>.<ct>`.
+  - `calendar.ts`: a minimal Calendar v3 client (calendars, events CRUD, instances). It retries
+    once on a 401 with a forced refresh. `GoogleApiError.gone` covers 404 and 410.
+  - `mapping.ts`: pure mapping. `toGoogleRrule` (wall-clock UNTIL to UTC), `scheduleEvent`
+    (length from `planOccurrence` incl. soak), `skipOverlay`, `occurrenceLogEvent`, `runLogEvent`,
+    `nearestColorId`, `hashOf`.
+  - `sync.ts`: `buildDesired`, pure `diffSync`, and `applyOps`, which also recovers from events
+    and calendars deleted in Google.
+  - `service.ts`: `GcalService` handles the OAuth round trip, status, disconnect, the
+    `logRuns` setting (`settings.gcal.logRuns`), and the debounced queue (3 s) with a 5 min
+    periodic pass, exponential backoff (30 s up to 30 min) and `needsReconnect` handling.
+  - `fake-google.ts`: an in-memory Google (token, revoke, calendars, events, instances) for tests,
+    with PKCE checking, failure injection, `expireGrants()` and `expireAccessTokens()`.
+- DB: migration `0003_gcal` adds `gcal_account` (single row, encrypted refresh token, calendar id,
+  needs_reconnect, last sync and last error) and `gcal_events` (key, kind, event id, hash, at).
+  `schedules.gcal_event_id` is filled in as well.
+- API (`api/gcal.ts`): `GET /api/gcal/status`, `GET /api/gcal/connect` (302 to Google),
+  `GET /api/gcal/callback` (302 to `${PUBLIC_URL}/settings?gcal=…`), `POST /api/gcal/disconnect`,
+  `POST /api/gcal/resync`, `PATCH /api/gcal/settings {logRuns}`. DTOs are in
+  `packages/shared/src/gcal.ts`.
+- `scheduleRoutes` takes `onChange` (called on create, patch, delete and skip). `createApp` takes
+  `gcal?` and builds an idle one from config when it isn't passed. `index.ts` starts and stops it.
+  `harness({ gcal })` accepts `GcalOptions` overrides (e.g. `fetch: new FakeGoogle().fetch`) and
+  returns `gcal`.
+- Config: `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET` are now in `config.ts`. Sync counts as
+  configured only when `SESSION_SECRET` has at least 16 characters.
+- Web:
+  - `components/gcal-card.tsx` is the Settings card. It has four states (not set up with a
+    copyable redirect URI, connect, connected, reconnect). The connected state has a status row,
+    event counts, a "Log finished runs" switch, Resync, and Disconnect with a confirm, plus a nudge
+    near the 7-day Testing-mode expiry.
+  - `GcalReconnectBanner` sits in `AppShell` and is hidden on /settings.
+  - `lib/gcal.ts` holds tested helpers.
+  - Settings shows a toast for `?gcal=` redirects and then cleans the URL.
+  - e2e uses `page.route` to mock the status for the connected, reconnect and phone screenshots.
+- README has a step-by-step Google Cloud setup (section `#google-calendar-sync`, which the card
+  links to). `.env.example` notes are updated. `docs/gcal.md` covers the design and the two-way
+  sync TODO.
+
+**Conventions**
+
+- Anything that changes what the calendar shows should call `gcal.request()` (or rely on the
+  5 min pass). Never call Google directly from a route.
+- A new synced item kind needs a key prefix, a `kind`, an `at` (so the window logic applies) and a
+  deterministic body for hashing.
+
+**Known gaps**
+
+- Never exercised against real Google (fake only). Unverified: instance lookup via
+  `timeMin/timeMax`, whether PUTting a changed RRULE leaves orphaned exceptions, and `PUT` on an
+  event deleted in Google (handled for 404/410 only).
+- The series `DTSTART` is the schedule's original `dtstart`, so after an edit Google shows the new
+  timing on past dates too. Turn on "Log finished runs" to see what really ran.
+- Skips are annotated only after the engine has marked them (at occurrence start, or on a manual
+  skip), so there's no predicted skip ahead of time.
+- OAuth `state` is in memory: a server restart during consent means clicking Connect again.
+- No auth on `/api/gcal/*` yet (phase 7). Connect and disconnect are open on the LAN like the rest.
+- Two-way sync (watch channels plus syncToken) is designed in `docs/gcal.md` but not built.
