@@ -10,7 +10,9 @@ import type { LinkTapClient } from './linktap/client';
 import type { Poller } from './poller';
 import { apiRoutes } from './api/routes';
 import { hookRoutes } from './api/hooks';
+import { analyticsRoutes } from './api/analytics';
 import { scheduleRoutes } from './api/schedules';
+import type { OpenMeteoProvider } from './weather/open-meteo';
 import type { SchedulerEngine } from './schedule/engine';
 import type { Executor } from './schedule/executor';
 
@@ -26,6 +28,7 @@ export interface AppDeps {
   poller?: Poller;
   scheduler?: SchedulerEngine;
   executor?: Executor;
+  weather?: OpenMeteoProvider;
   /** Default schedule time zone when a gateway has none. Default: the server's. */
   timeZone?: string;
 }
@@ -37,6 +40,7 @@ export function createApp({
   poller,
   scheduler,
   executor,
+  weather,
   timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone,
 }: AppDeps) {
   const app = new Hono();
@@ -57,6 +61,7 @@ export function createApp({
   });
   api.route('/', apiRoutes({ db, linktap, poller, mock: config.LINKTAP_MOCK }));
   api.route('/', scheduleRoutes({ db, scheduler, executor, timeZone }));
+  api.route('/', analyticsRoutes({ db, weather, timeZone }));
   api.all('*', (c) => c.json({ error: 'not found' }, 404));
   app.route('/api', api);
 
