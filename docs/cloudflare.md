@@ -220,7 +220,14 @@ better-sqlite3 in memory, mock LinkTap) for the existing code; workerd should be
 ## Secrets and config
 
 Wrangler secrets (`wrangler secret put`): `LINKTAP_USERNAME`, `LINKTAP_API_KEY`, `ADMIN_PASSWORD`,
-`SESSION_SECRET`, `WEBHOOK_SECRET`, `GOOGLE_CLIENT_SECRET`.
+`SESSION_SECRET`, `WEBHOOK_SECRET`, `GOOGLE_CLIENT_SECRET`, `ADMIN_EMAIL`. With
+`GOOGLE_CLIENT_ID` + `GOOGLE_CLIENT_SECRET` + `ADMIN_EMAIL`, sign-in is Google only and
+`ADMIN_PASSWORD` is ignored; with real taps one of the two must be set up (else 503).
+
+Google sign-in costs DO requests too: `/api/auth/google/start` (one ephemeral row written) and
+`/api/auth/google/callback` (token exchange + JWKS fetch from inside the DO, cached in memory per
+Cache-Control) are public routes, so the edge rate limits them with `AUTH_LIMITER` like login.
+A sign-in is two DO requests and a handful of rows; the JWKS RS256 verify is one WebCrypto call.
 
 Plain vars (`wrangler.jsonc`): `PUBLIC_URL` (the `*.workers.dev` URL or a custom domain on a free
 Cloudflare zone; must be https for passkeys, push and the webhook), `LINKTAP_MOCK`,

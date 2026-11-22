@@ -1,6 +1,7 @@
 // Hoseidon on Cloudflare Workers, Free plan only. See docs/cloudflare.md.
 // Secrets (never in this file): wrangler secret put LINKTAP_USERNAME / LINKTAP_API_KEY /
-// ADMIN_PASSWORD / SESSION_SECRET / WEBHOOK_SECRET / GOOGLE_CLIENT_SECRET.
+// ADMIN_PASSWORD / SESSION_SECRET / WEBHOOK_SECRET / GOOGLE_CLIENT_SECRET / ADMIN_EMAIL.
+// GOOGLE_CLIENT_ID + GOOGLE_CLIENT_SECRET + ADMIN_EMAIL = Google sign-in (password sign-in off).
 {
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "hoseidon",
@@ -18,7 +19,7 @@
   "durable_objects": {
     "bindings": [{ "name": "BRAIN", "class_name": "Brain" }],
   },
-  // Per-client limit on the public routes (login, health, session probe), enforced in the Worker
+  // Per-client limit on the public routes (login, Google sign-in, health, session probe), enforced in the Worker
   // before a Durable Object request is spent. Rate limiting is included in the Free plan.
   "ratelimits": [
     { "name": "AUTH_LIMITER", "namespace_id": "1001", "simple": { "limit": 30, "period": 60 } },

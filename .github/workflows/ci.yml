@@ -155,11 +155,12 @@ jobs:
           WEBHOOK_SECRET: ${{ secrets.WEBHOOK_SECRET }}
           GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
           GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
+          ADMIN_EMAIL: ${{ secrets.ADMIN_EMAIL }}
         run: |
           existing=$(pnpm --filter @hoseidon/worker exec wrangler secret list --format json | sed -n '/^\[/,$p' | jq -c '[.[].name]')
           json=$(jq -n --argjson existing "$existing" --arg all "$PUSH_ALL" '[
             "LINKTAP_USERNAME","LINKTAP_API_KEY","SESSION_SECRET","ADMIN_PASSWORD",
-            "WEBHOOK_SECRET","GOOGLE_CLIENT_ID","GOOGLE_CLIENT_SECRET"
+            "WEBHOOK_SECRET","GOOGLE_CLIENT_ID","GOOGLE_CLIENT_SECRET","ADMIN_EMAIL"
           ] | map(select($all == "true" or (. as $n | $existing | contains([$n]) | not)))
             | map({key: ., value: (env[.] // "")}) | map(select(.value != "")) | from_entries')
           if [ "$json" = "{}" ]; then
