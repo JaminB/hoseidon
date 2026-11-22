@@ -343,7 +343,12 @@
     `logRuns` setting (`settings.gcal.logRuns`), and the debounced queue (3 s) with a 5 min
     periodic pass, exponential backoff (30 s up to 30 min) and `needsReconnect` handling.
   - `fake-google.ts`: an in-memory Google (token, revoke, calendars, events, instances) for tests,
-    with PKCE checking, failure injection, `expireGrants()` and `expireAccessTokens()`.
+    with PKCE checking, failure injection, `expireGrants()`, `expireAccessTokens()`,
+    `loseNextResponse()` (do the call, answer with an error) and `rejectClient` (invalid_client).
+  - Review fixes (CodeRabbit): client-chosen event ids recorded before insert (no duplicates on a
+    lost response), callback serialized with sync, 403 rate limits never replace the calendar,
+    only `invalid_grant` flags reconnect, a skip on a series deleted in Google recreates it, run
+    logs use UTC instants. `GoogleApiError.rateLimited`, `newEventId()`.
 - DB: migration `0003_gcal` adds `gcal_account` (single row, encrypted refresh token, calendar id,
   needs_reconnect, last sync and last error) and `gcal_events` (key, kind, event id, hash, at).
   `schedules.gcal_event_id` is filled in as well.
@@ -389,3 +394,5 @@
 - OAuth `state` is in memory: a server restart during consent means clicking Connect again.
 - No auth on `/api/gcal/*` yet (phase 7). Connect and disconnect are open on the LAN like the rest.
 - Two-way sync (watch channels plus syncToken) is designed in `docs/gcal.md` but not built.
+- If the series PUT itself is lost after Google applied it, the next pass just PUTs again (fine).
+  An insert that Google rejects with 400 is retried every sync (each time with a new id).

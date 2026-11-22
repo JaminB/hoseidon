@@ -25,7 +25,11 @@ One-way: Hoseidon → Google. Setup steps for the Google Cloud side are in the
   on every page except Settings, which shows a Reconnect card instead.
 - Disconnect revokes the refresh token (best effort) and clears it. The calendar id and the event
   map are kept, so reconnecting the same Google account continues where it left off. If the stored
-  calendar is gone or not ours (404/403), connecting creates a new one and forgets the old map.
+  calendar is gone or not ours (404, or a 403 that isn't a rate limit), connecting creates a new
+  one and forgets the old map. Other token errors (`invalid_client`, 5xx) back off and keep the
+  token, so fixing the OAuth client resumes sync without reconnecting.
+- The callback holds syncs off and waits for an in-flight one before it swaps the token or the
+  calendar, so no event id is ever saved against a calendar that is no longer the current one.
 
 ## What gets synced
 
@@ -53,8 +57,15 @@ the engine reads it.
    all logs are deleted when "Log finished runs" is switched off, and skips go with their series.
 3. `applyOps` sends them one by one and records each success in `gcal_events`, so progress survives
    a failure halfway through.
+   - Inserts send an event id we generate, recorded first with an empty hash. If Google made the
+     event but the response was lost, the next pass sees the row as stale and `PUT`s that id
+     instead of creating a duplicate (or inserts afresh if the id really doesn't exist).
    - Update is a full `PUT` (edits made in Google are overwritten). A 404/410 means the user deleted
      it in Google, so it is inserted again.
+   - If a skip's series was deleted in Google (`instances` returns 404/410), the series is
+     inserted again and its other skips are marked stale for a follow-up pass.
+   - Run logs send UTC instants (with the zone for display), so the repeated hour at a DST
+     fall-back stays exact. Series use wall time, which recurrence needs.
    - A skip looks up the instance with `events.instances(timeMin = occurrence − 1 min, timeMax = +1
 min)` and patches it. No instance (the rule changed) is recorded with a null event id and tried
      again when the series changes (the parent hash is part of the skip hash).
