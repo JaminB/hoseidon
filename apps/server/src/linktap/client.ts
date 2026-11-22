@@ -35,8 +35,9 @@ export type Bucket = 'devices' | 'status' | 'history' | 'command';
  * LinkTap's minimum intervals, as Hoseidon spaces them.
  *
  * - getWateringStatus: LinkTap answers "The minimum interval of calling this API is 30 seconds."
- *   We space it 31 s and treat it as ACCOUNT-WIDE (one lane for every taplinker). That is the
- *   conservative reading of the first live test; see docs/linktap-api.md.
+ *   The limit is PER TAPLINKER: in the live test two outlets were queried in the same second and
+ *   both succeeded, while each failure came 15-18 s after that same outlet's previous call.
+ *   We space each taplinker's calls 31 s apart; see docs/linktap-api.md.
  * - getWateringHistory: 10 min, per taplinker (two outlets back to back both succeeded live).
  * - getAllDevices and commands: account-wide, as documented.
  */
@@ -48,7 +49,7 @@ export const LINKTAP_LIMITS: Record<Bucket, BucketSpec> = {
 };
 
 /** Buckets whose limit applies per taplinker rather than per account. */
-export const PER_TAPLINKER_BUCKETS: ReadonlySet<Bucket> = new Set<Bucket>(['history']);
+export const PER_TAPLINKER_BUCKETS: ReadonlySet<Bucket> = new Set<Bucket>(['status', 'history']);
 
 export type LinkTapErrorKind = 'api' | 'http' | 'invalid' | 'rate_limit';
 
@@ -213,7 +214,7 @@ export function createLinkTapClient(opts: ClientOptions): LinkTapClient {
 
     getWateringStatus: (ref, o) => {
       const id = ref.taplinkerId.trim();
-      // One account-wide lane: every taplinker shares the 30 s status limit.
+      // One lane per taplinker: each outlet has its own 30 s status limit.
       return limited(
         'status',
         'getWateringStatus',
@@ -221,7 +222,7 @@ export function createLinkTapClient(opts: ClientOptions): LinkTapClient {
           const res = await call('getWateringStatus', ids(ref), getWateringStatusSchema);
           return normalizeWatering(res.status, now());
         },
-        { coalesceKey: id, priority: o?.priority },
+        { scope: id, coalesceKey: id, priority: o?.priority },
       );
     },
 
