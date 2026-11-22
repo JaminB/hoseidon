@@ -15,6 +15,10 @@ export const PUBLIC: { method: string; path: string }[] = [
   { method: 'POST', path: '/auth/logout' },
   { method: 'POST', path: '/auth/passkey/login/options' },
   { method: 'POST', path: '/auth/passkey/login/verify' },
+  // Google sign-in: browser navigations. The start writes one ephemeral row; the callback is
+  // validated by its single-use state (bound to a cookie), PKCE and the ID token.
+  { method: 'GET', path: '/auth/google/start' },
+  { method: 'GET', path: '/auth/google/callback' },
   // Google redirects the browser here; the OAuth `state` is what's validated.
   { method: 'GET', path: '/gcal/callback' },
 ];

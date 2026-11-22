@@ -6,6 +6,7 @@ import type {
   EventSeverity,
   EventSource,
   PlannedRunStatus,
+  UserRole,
   RunSource,
   RunStatus,
   ScheduleItem,
@@ -310,18 +311,43 @@ export const gcalEvents = sqliteTable('gcal_events', {
 export type GcalAccountRow = typeof gcalAccount.$inferSelect;
 export type GcalEventRow = typeof gcalEvents.$inferSelect;
 
-/** Browser sessions. Only a hash of the cookie token is stored, so a DB leak can't be replayed. */
-export const sessions = sqliteTable('sessions', {
-  /** sha256 hex of the cookie token. */
-  id: text('id').primaryKey(),
+/**
+ * Who may sign in with Google (the allowlist). Emails are stored trimmed and lowercased. The
+ * ADMIN_EMAIL addresses are (re)ensured as admins on every boot.
+ */
+export const users = sqliteTable('users', {
+  email: text('email').primaryKey(),
+  role: text('role').$type<UserRole>().notNull().default('member'),
+  /** From the Google profile, refreshed on each sign-in. */
+  name: text('name'),
+  picture: text('picture'),
+  /** Email of the admin who invited them; null for ADMIN_EMAIL rows. */
+  addedBy: text('added_by'),
   createdAt: createdAt(),
-  expiresAt: ts('expires_at').notNull(),
+  lastLoginAt: ts('last_login_at'),
+  disabled: integer('disabled', { mode: 'boolean' }).notNull().default(false),
 });
 
-/** WebAuthn credentials for the single admin. */
+/** Browser sessions. Only a hash of the cookie token is stored, so a DB leak can't be replayed. */
+export const sessions = sqliteTable(
+  'sessions',
+  {
+    /** sha256 hex of the cookie token. */
+    id: text('id').primaryKey(),
+    createdAt: createdAt(),
+    expiresAt: ts('expires_at').notNull(),
+    /** The signed-in user; null = the password admin (only valid while Google sign-in is off). */
+    userEmail: text('user_email'),
+  },
+  (t) => [index('sessions_user_idx').on(t.userEmail)],
+);
+
+/** WebAuthn credentials, each bound to a user. */
 export const passkeys = sqliteTable('passkeys', {
   /** Base64url credential id. */
   id: text('id').primaryKey(),
+  /** Owner; null = registered by the password admin (refused once Google sign-in is on). */
+  userEmail: text('user_email'),
   name: text('name').notNull(),
   /** Base64url COSE public key. */
   publicKey: text('public_key').notNull(),
@@ -340,6 +366,7 @@ export const pushSubscriptions = sqliteTable('push_subscriptions', {
 });
 
 export type PasskeyRow = typeof passkeys.$inferSelect;
+export type UserRow = typeof users.$inferSelect;
 export type PushSubscriptionRow = typeof pushSubscriptions.$inferSelect;
 
 /**

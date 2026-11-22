@@ -95,7 +95,13 @@ export function createApp({
   if (requireAuth) api.use('*', apiGuard({ auth, publicUrl: config.PUBLIC_URL }));
   api.route(
     '/',
-    authRoutes({ auth, publicUrl: config.PUBLIC_URL, trustProxy: config.TRUST_PROXY, clientIp }),
+    authRoutes({
+      auth,
+      publicUrl: config.PUBLIC_URL,
+      trustProxy: config.TRUST_PROXY,
+      clientIp,
+      requireAuth,
+    }),
   );
   api.route('/', settingsRoutes({ db, config, linktap, poller, push, activeTimeZone: timeZone }));
   api.route('/', apiRoutes({ db, linktap, poller, scheduler, mock: config.LINKTAP_MOCK }));

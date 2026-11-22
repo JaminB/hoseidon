@@ -50,6 +50,13 @@
       "when": 1795367456613,
       "tag": "0006_durable_state",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "6",
+      "when": 1795387066378,
+      "tag": "0007_users",
+      "breakpoints": true
     }
   ]
 }

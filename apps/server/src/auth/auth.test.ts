@@ -50,7 +50,17 @@ describe('API guard', () => {
     expect((await app.request('/api/settings')).status).toBe(401);
     expect((await app.request('/api/health')).status).toBe(200);
     const probe = await app.request('/api/auth/session');
-    expect(await probe.json()).toEqual({ authenticated: false, configured: true, passkeys: false });
+    expect(await probe.json()).toEqual({
+      authenticated: false,
+      configured: true,
+      passkeys: false,
+      google: false,
+      password: true,
+      email: null,
+      name: null,
+      picture: null,
+      role: null,
+    });
   });
 
   it('lets the Google callback through (OAuth state is checked inside)', async () => {
