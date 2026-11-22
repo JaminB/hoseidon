@@ -1,11 +1,15 @@
 import { sql } from 'drizzle-orm';
-import { index, integer, real, sqliteTable, text } from 'drizzle-orm/sqlite-core';
+import { index, integer, real, sqliteTable, text, uniqueIndex } from 'drizzle-orm/sqlite-core';
 import type {
   AlarmFlag,
+  CycleSoak,
   EventSeverity,
   EventSource,
+  PlannedRunStatus,
   RunSource,
   RunStatus,
+  ScheduleItem,
+  SkipRules,
   Watering,
   WorkMode,
 } from '@hoseidon/shared';
@@ -147,9 +151,80 @@ export const events = sqliteTable(
   (t) => [index('events_at_idx').on(t.at), index('events_device_at_idx').on(t.deviceId, t.at)],
 );
 
+/** Hoseidon-owned watering schedules (LinkTap's cloud API can't store plans). */
+export const schedules = sqliteTable('schedules', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  name: text('name').notNull(),
+  color: text('color').notNull(),
+  /** RRULE body without DTSTART, e.g. "FREQ=DAILY;INTERVAL=2". */
+  rrule: text('rrule').notNull(),
+  /** Local wall-clock start "YYYY-MM-DDTHH:mm" in `timezone`. */
+  dtstart: text('dtstart').notNull(),
+  timezone: text('timezone').notNull(),
+  enabled: integer('enabled', { mode: 'boolean' }).notNull().default(true),
+  items: text('items', { mode: 'json' }).$type<ScheduleItem[]>().notNull(),
+  cycleSoak: text('cycle_soak', { mode: 'json' }).$type<CycleSoak | null>(),
+  sequential: integer('sequential', { mode: 'boolean' }).notNull().default(true),
+  skipRules: text('skip_rules', { mode: 'json' }).$type<SkipRules>().notNull(),
+  /** Google Calendar event for this schedule (phase 6). */
+  gcalEventId: text('gcal_event_id'),
+  /**
+   * Occurrences before this are never materialized. Bumped whenever the timing changes, so an
+   * edit at 6:05 doesn't replay the 6:00 run.
+   */
+  effectiveFrom: ts('effective_from').notNull(),
+  createdAt: createdAt(),
+  updatedAt: ts('updated_at').notNull(),
+});
+
+/** One device-cycle of one schedule occurrence: what the engine will start, or did. */
+export const plannedRuns = sqliteTable(
+  'planned_runs',
+  {
+    id: integer('id').primaryKey({ autoIncrement: true }),
+    scheduleId: integer('schedule_id')
+      .notNull()
+      .references(() => schedules.id, { onDelete: 'cascade' }),
+    deviceId: text('device_id')
+      .notNull()
+      .references(() => devices.id, { onDelete: 'cascade' }),
+    gatewayId: text('gateway_id').notNull(),
+    occurrenceAt: ts('occurrence_at').notNull(),
+    /** Zone position in the schedule (0-based) and cycle number (1-based). */
+    seq: integer('seq').notNull(),
+    cycle: integer('cycle').notNull(),
+    /** Estimated start from the plan; the engine goes by readiness, not this. */
+    plannedAt: ts('planned_at').notNull(),
+    /** Per-cycle seconds before weather scaling. */
+    baseSeconds: integer('base_seconds').notNull(),
+    /** Per-cycle seconds that will be (or were) sent, after scaling and quantizing. */
+    seconds: integer('seconds').notNull(),
+    scale: real('scale').notNull().default(1),
+    status: text('status').$type<PlannedRunStatus>().notNull(),
+    skipReason: text('skip_reason'),
+    error: text('error'),
+    attempts: integer('attempts').notNull().default(0),
+    /** When skip rules were applied to this occurrence; null = the occurrence hasn't begun. */
+    weatherCheckedAt: ts('weather_checked_at'),
+    runId: integer('run_id').references(() => runs.id, { onDelete: 'set null' }),
+    startedAt: ts('started_at'),
+    endedAt: ts('ended_at'),
+    createdAt: createdAt(),
+    updatedAt: ts('updated_at').notNull(),
+  },
+  (t) => [
+    uniqueIndex('planned_runs_slot_idx').on(t.scheduleId, t.occurrenceAt, t.seq, t.cycle),
+    index('planned_runs_status_idx').on(t.status),
+    index('planned_runs_planned_at_idx').on(t.plannedAt),
+  ],
+);
+
 export type GatewayRow = typeof gateways.$inferSelect;
 export type DeviceRow = typeof devices.$inferSelect;
 export type SnapshotRow = typeof deviceSnapshots.$inferSelect;
 export type RunRow = typeof runs.$inferSelect;
 export type EventRow = typeof events.$inferSelect;
 export type NewEvent = typeof events.$inferInsert;
+export type ScheduleRow = typeof schedules.$inferSelect;
+export type PlannedRunRow = typeof plannedRuns.$inferSelect;
+export type NewPlannedRun = typeof plannedRuns.$inferInsert;

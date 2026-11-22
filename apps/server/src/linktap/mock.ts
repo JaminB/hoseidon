@@ -127,6 +127,7 @@ export class LinkTapMock {
   private readonly enforce: boolean;
   private readonly timeZone: string;
   private readonly lastCall = new Map<string, number>();
+  private readonly silentFailures = new Map<string, number>();
 
   constructor(opts: MockOptions = {}) {
     this.now = opts.now ?? Date.now;
@@ -188,6 +189,14 @@ export class LinkTapMock {
 
   gatewayOf(taplinkerId: string): MockGateway | undefined {
     return this.gateways.find((g) => g.taplinkers.some((t) => t.id === taplinkerId));
+  }
+
+  /**
+   * The next `count` starts for this taplinker answer ok but never run: a failure mode some users
+   * report from the real service, which is why the scheduler verifies starts.
+   */
+  failStartsSilently(taplinkerId: string, count = 1) {
+    this.silentFailures.set(taplinkerId, count);
   }
 
   setGatewayOnline(gatewayId: string, online: boolean) {
@@ -261,7 +270,9 @@ export class LinkTapMock {
           if (taplinker.alarms.has('noWater') || taplinker.alarms.has('valveBroken')) {
             return err('Device has an active alarm; dismiss it first');
           }
-          this.startRun(taplinker, sec, body.autoBack !== false, at);
+          const silent = this.silentFailures.get(taplinker.id) ?? 0;
+          if (silent > 0) this.silentFailures.set(taplinker.id, silent - 1);
+          else this.startRun(taplinker, sec, body.autoBack !== false, at);
         } else {
           this.finishRun(taplinker, at);
         }

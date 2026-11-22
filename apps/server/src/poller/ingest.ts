@@ -245,7 +245,7 @@ export const ALARM_LABELS: Record<AlarmFlag, string> = {
 
 // ---- runs ---------------------------------------------------------------------------------------
 
-type Tx = Pick<Db, 'select' | 'insert' | 'update'>;
+export type Tx = Pick<Db, 'select' | 'insert' | 'update'>;
 
 export function openRun(tx: Tx, deviceId: string) {
   return tx
@@ -271,6 +271,36 @@ export function startRun(
     .values({ ...opts, scheduleId: opts.scheduleId ?? null, status: 'running' })
     .returning()
     .get();
+}
+
+/**
+ * Bookkeeping for a run Hoseidon just started: close any open run on the device (a new instant
+ * run replaces it), mark the device watering so the status poller picks it up, open the run.
+ */
+export function recordStart(
+  tx: Tx,
+  opts: { deviceId: string; seconds: number; now: Date; scheduleId?: number | null },
+) {
+  const open = openRun(tx, opts.deviceId);
+  if (open) closeRun(tx, open, opts.now, 'stopped');
+  tx.update(devices)
+    .set({
+      watering: {
+        remainingSec: opts.seconds,
+        totalSec: opts.seconds,
+        flowMlPerMin: null,
+        volumeMl: null,
+      },
+    })
+    .where(eq(devices.id, opts.deviceId))
+    .run();
+  return startRun(tx, {
+    deviceId: opts.deviceId,
+    startedAt: opts.now,
+    plannedSec: opts.seconds,
+    source: 'hoseidon',
+    scheduleId: opts.scheduleId ?? null,
+  });
 }
 
 export function closeRun(
