@@ -133,6 +133,8 @@ export function WaterWeatherChart({ rows: metricRows }: { rows: ChartRow[] }) {
               allowDecimals={false}
             />
           )}
+          {/* ET0 is a fraction of rainfall's range; its own hidden scale keeps the line readable. */}
+          {hasWeather && <YAxis yAxisId="e" hide domain={[0, 'auto']} />}
           <Tooltip
             cursor={{ fill: COLOR.cursor, opacity: 0.6 }}
             content={(p) => (
@@ -175,7 +177,7 @@ export function WaterWeatherChart({ rows: metricRows }: { rows: ChartRow[] }) {
           )}
           {hasWeather && (
             <Line
-              yAxisId="r"
+              yAxisId="e"
               dataKey="et0Mm"
               type="monotone"
               stroke={COLOR.et0}
@@ -224,8 +226,8 @@ function TrendChart({
             tick={tick}
             tickLine={false}
             axisLine={false}
-            width={unit.length > 3 ? 62 : 48}
-            tickFormatter={(v: number) => `${v} ${unit}`}
+            width={unit.length > 3 ? 62 : unit ? 48 : 40}
+            tickFormatter={(v: number) => (unit ? `${v} ${unit}` : String(Number(v.toFixed(2))))}
             domain={[0, 'auto']}
           />
           <Tooltip
@@ -275,7 +277,7 @@ export function FlowChart({ rows }: { rows: ChartRow[] }) {
     <TrendChart
       rows={useMemo(() => toDisplayUnits(rows, units), [rows, units])}
       dataKey="flowLMin"
-      unit={flow}
+      unit="" // the card subtitle names the unit once
       color={COLOR.rain}
       name="Flow"
       describe={(r) => (r.flowLMin === null ? 'No data' : `${r.flowLMin} ${flow}`)}

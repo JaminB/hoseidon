@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { devices } from '../db/schema';
 import { harness } from '../test-utils';
 import { resolveTimeZone } from './settings';
 
@@ -32,6 +33,13 @@ describe('LinkTap connection test', () => {
     expect(json.gateways).toBeGreaterThan(0);
     expect(json.devices).toBeGreaterThan(0);
     expect(json.message).toMatch(/mock/i);
+  });
+
+  it('keeps the devices it fetched instead of throwing them away', async () => {
+    const { app, db } = harness();
+    expect(db.select().from(devices).all()).toHaveLength(0);
+    await app.request('/api/linktap/test', send('POST'));
+    expect(db.select().from(devices).all().length).toBeGreaterThan(0);
   });
 
   it('reports a failure instead of throwing', async () => {

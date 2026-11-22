@@ -93,7 +93,7 @@ export function HomePage() {
         />
         <Stat
           icon={Waves}
-          label="Watered today"
+          label="Finished today"
           value={formatDuration(doneSec)}
           hint={`${runs.filter((r) => r.status === 'done').length} of ${runs.length} planned runs`}
         />
@@ -321,7 +321,7 @@ function Timeline({
                   <Button
                     size="sm"
                     variant="ghost"
-                    className="ml-auto h-6 px-2 text-xs opacity-100 md:opacity-0 md:group-hover:opacity-100 md:focus-visible:opacity-100"
+                    className="text-muted ml-auto h-6 px-2 text-xs"
                     onClick={() => skip.mutate(r.id)}
                   >
                     Skip

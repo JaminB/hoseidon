@@ -81,9 +81,12 @@ export function createApp({
     return c.json(body);
   });
   if (requireAuth) api.use('*', apiGuard({ auth, publicUrl: config.PUBLIC_URL }));
-  api.route('/', authRoutes({ auth, publicUrl: config.PUBLIC_URL }));
+  api.route(
+    '/',
+    authRoutes({ auth, publicUrl: config.PUBLIC_URL, trustProxy: config.TRUST_PROXY }),
+  );
   api.route('/', settingsRoutes({ db, config, linktap, poller, push, activeTimeZone: timeZone }));
-  api.route('/', apiRoutes({ db, linktap, poller, mock: config.LINKTAP_MOCK }));
+  api.route('/', apiRoutes({ db, linktap, poller, scheduler, mock: config.LINKTAP_MOCK }));
   api.route(
     '/',
     scheduleRoutes({ db, scheduler, executor, timeZone, onChange: () => gcal.request() }),

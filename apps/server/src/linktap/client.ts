@@ -16,7 +16,7 @@ import {
   type HistoryEntry,
   type NormalizedGateway,
 } from './normalize';
-import { RateLimiter, type BucketSpec } from './rate-limit';
+import { RateLimiter, type BucketSpec, type LastCallStore } from './rate-limit';
 import { CallStats, type ApiStats } from './stats';
 
 export const LINKTAP_BASE_URL = 'https://www.link-tap.com/api/';
@@ -97,11 +97,13 @@ export interface ClientOptions {
   transport: Transport;
   limits?: Partial<Record<Bucket, BucketSpec>>;
   now?: () => number;
+  /** Persists last-call times so a restart doesn't forget the rate limits. */
+  store?: LastCallStore;
 }
 
 export function createLinkTapClient(opts: ClientOptions): LinkTapClient {
   const now = opts.now ?? Date.now;
-  const limiter = new RateLimiter<Bucket>({ ...LINKTAP_LIMITS, ...opts.limits }, now);
+  const limiter = new RateLimiter<Bucket>({ ...LINKTAP_LIMITS, ...opts.limits }, now, opts.store);
   const stats = new CallStats(now);
 
   /** limiter.schedule, plus how long the call waited in the queue (for the Network page). */

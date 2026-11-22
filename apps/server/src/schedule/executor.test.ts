@@ -6,6 +6,7 @@ import {
   LocalGatewayExecutor,
   NotImplementedError,
   startVerified,
+  StartAbortedError,
   StartVerifyError,
 } from './executor';
 
@@ -71,6 +72,22 @@ describe('startVerified', () => {
     mock.failStartsSilently(lawn.id, 5);
     await expect(startVerified(executor, lawn, 600)).rejects.toBeInstanceOf(StartVerifyError);
     expect(starts(mock.calls)).toHaveLength(2);
+  });
+
+  it('does not retry a start the user stopped during verify', async () => {
+    const { executor, mock } = setup();
+    mock.failStartsSilently(lawn.id, 1);
+    let stopped = false;
+    const verify = executor.verify.bind(executor);
+    executor.verify = async (d) => {
+      stopped = true;
+      return verify(d);
+    };
+    await expect(
+      startVerified(executor, lawn, 600, undefined, () => stopped),
+    ).rejects.toBeInstanceOf(StartAbortedError);
+    expect(starts(mock.calls)).toHaveLength(1);
+    expect(mock.find(lawn.id)?.run ?? null).toBeNull();
   });
 
   it('does not retry API errors', async () => {

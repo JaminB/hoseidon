@@ -277,6 +277,63 @@ describe('webhook receiver', () => {
   });
 });
 
+describe('webhook racing our own start', () => {
+  const runsOf = (h: Awaited<ReturnType<typeof seeded>>, id: string) =>
+    h.db.select().from(runs).where(eq(runs.deviceId, id)).all();
+  const wateringOn = (h: Awaited<ReturnType<typeof seeded>>, id: string) =>
+    h.app.request(`/hooks/linktap/s3cret`, json({ event: 'wateringOn', deviceId: id }));
+
+  it('adopts the early LinkTap run for a manual start instead of recording two', async () => {
+    const h = await seeded();
+    await wateringOn(h, MOCK_IDS.sideYard);
+    const res = await h.app.request(
+      `/api/devices/${MOCK_IDS.sideYard}/run`,
+      json({ seconds: 600 }),
+    );
+    expect(res.status).toBe(200);
+    const all = runsOf(h, MOCK_IDS.sideYard);
+    expect(all).toHaveLength(1);
+    expect(all[0]).toMatchObject({ source: 'hoseidon', status: 'running', plannedSec: 600 });
+  });
+
+  it('adopts it for a scheduled launch too, and history then matches one run', async () => {
+    const h = await seeded();
+    await wateringOn(h, MOCK_IDS.sideYard);
+    const { recordStart } = await import('./poller/ingest');
+    const run = h.db.transaction((tx) =>
+      recordStart(tx, {
+        deviceId: MOCK_IDS.sideYard,
+        seconds: 300,
+        now: new Date(),
+        scheduleId: null,
+      }),
+    );
+    expect(runsOf(h, MOCK_IDS.sideYard)).toHaveLength(1);
+    expect(runsOf(h, MOCK_IDS.sideYard)[0]!.id).toBe(run.id);
+  });
+
+  it('still replaces an old run that Hoseidon did not start', async () => {
+    const h = await seeded();
+    const { startRun, recordStart } = await import('./poller/ingest');
+    h.db.transaction((tx) =>
+      startRun(tx, {
+        deviceId: MOCK_IDS.sideYard,
+        startedAt: new Date(Date.now() - 10 * 60_000),
+        plannedSec: null,
+        source: 'linktap',
+      }),
+    );
+    h.db.transaction((tx) =>
+      recordStart(tx, { deviceId: MOCK_IDS.sideYard, seconds: 300, now: new Date() }),
+    );
+    expect(
+      runsOf(h, MOCK_IDS.sideYard)
+        .map((r) => r.status)
+        .sort(),
+    ).toEqual(['running', 'stopped']);
+  });
+});
+
 describe('review hardening', () => {
   const patch = (body: unknown) => ({ ...json(body), method: 'PATCH' });
 

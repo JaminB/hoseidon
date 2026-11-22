@@ -100,4 +100,25 @@ describe('RateLimiter', () => {
     expect(limiter.pendingCount('slow')).toBe(0);
     expect(limiter.nextAvailableAt('slow').getTime()).toBe(t0 + 20_000);
   });
+
+  it('remembers the last call across restarts through a store', async () => {
+    const saved = new Map<string, number>();
+    const store = {
+      get: (k: string) => saved.get(k),
+      set: (k: string, t: number) => void saved.set(k, t),
+    };
+    const specs = { slow: { intervalMs: 10_000 } };
+    const t0 = Date.now();
+    await new RateLimiter(specs, Date.now, store).schedule('slow', async () => {});
+    expect(saved.get('slow')).toBe(t0);
+
+    // A "restarted" limiter shares the store, so its first call still has to wait.
+    const again = new RateLimiter(specs, Date.now, store);
+    expect(again.nextAvailableAt('slow').getTime()).toBe(t0 + 10_000);
+    const starts: number[] = [];
+    const call = again.schedule('slow', async () => void starts.push(Date.now() - t0));
+    await vi.runAllTimersAsync();
+    await call;
+    expect(starts).toEqual([10_000]);
+  });
 });

@@ -142,6 +142,54 @@ describe('login', () => {
     expect(Number(locked.headers.get('retry-after'))).toBeGreaterThan(0);
   });
 
+  it('throttles per client, so strangers cannot lock the owner out', async () => {
+    const h = await secured({ TRUST_PROXY: 'true' });
+    const from = (ip: string) => ({ 'cf-connecting-ip': ip });
+    for (let i = 0; i < 8; i++) {
+      await post(h.app)('/api/auth/login', { password: `bad${i}` }, from('203.0.113.9'));
+    }
+    const attacker = await post(h.app)(
+      '/api/auth/login',
+      { password: PASSWORD },
+      from('203.0.113.9'),
+    );
+    expect(attacker.status).toBe(429);
+    const owner = await post(h.app)(
+      '/api/auth/login',
+      { password: PASSWORD },
+      from('198.51.100.1'),
+    );
+    expect(owner.status).toBe(200);
+  });
+
+  it('ignores proxy headers unless TRUST_PROXY is set', async () => {
+    const { app } = await secured();
+    for (let i = 0; i < 8; i++) {
+      await post(app)(
+        '/api/auth/login',
+        { password: `bad${i}` },
+        { 'cf-connecting-ip': `1.1.1.${i}` },
+      );
+    }
+    const res = await post(app)(
+      '/api/auth/login',
+      { password: PASSWORD },
+      { 'cf-connecting-ip': '9.9.9.9' },
+    );
+    expect(res.status).toBe(429);
+  });
+
+  it('revokes the stored password when ADMIN_PASSWORD is removed', async () => {
+    const h = await secured();
+    const { cookie } = await signIn(h);
+    const { AuthService } = await import('./service');
+    const next = new AuthService({ db: h.db, config: { ...h.config, ADMIN_PASSWORD: '' } });
+    await next.whenReady();
+    expect(next.configured).toBe(false);
+    expect((await next.login(PASSWORD)).ok).toBe(false);
+    expect(h.auth.isValid(cookie.split('=')[1])).toBe(false);
+  });
+
   it('picks up a changed ADMIN_PASSWORD and signs old sessions out', async () => {
     const h = await secured();
     const { cookie } = await signIn(h);

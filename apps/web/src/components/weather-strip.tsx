@@ -98,7 +98,7 @@ export function WeatherStrip({ now }: { now: number }) {
           href="https://open-meteo.com/"
           target="_blank"
           rel="noreferrer"
-          className="hover:text-muted underline-offset-2 hover:underline"
+          className="hover:text-muted whitespace-nowrap underline-offset-2 hover:underline"
         >
           {WEATHER_ATTRIBUTION}
         </a>

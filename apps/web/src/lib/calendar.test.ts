@@ -6,6 +6,7 @@ import {
   fromLocalDateTime,
   layoutDay,
   toLocalDateTime,
+  visibleHourRange,
 } from './calendar';
 
 const at = (s: string) => fromLocalDateTime(s);
@@ -93,5 +94,29 @@ describe('describeRrule', () => {
     ['FREQ=YEARLY', 'FREQ=YEARLY'],
   ])('%s -> %s', (rule, text) => {
     expect(describeRrule(rule)).toBe(text);
+  });
+});
+
+describe('visibleHourRange', () => {
+  const day = at('2026-11-21T00:00');
+
+  it('fits the earliest and latest block, with padding', () => {
+    const items = [
+      block('a', '2026-11-21T05:00', '2026-11-21T05:30'),
+      block('b', '2026-11-21T22:55', '2026-11-21T23:10'),
+    ];
+    expect(visibleHourRange(items, [day])).toEqual([4, 24]);
+  });
+
+  it('keeps a minimum height and falls back when nothing is scheduled', () => {
+    expect(visibleHourRange([block('a', '2026-11-21T06:00', '2026-11-21T06:30')], [day])).toEqual([
+      3, 11,
+    ]);
+    expect(visibleHourRange([], [day])).toEqual([5, 19]);
+  });
+
+  it('ignores blocks on days that are not shown', () => {
+    const later = [block('a', '2026-11-25T22:00', '2026-11-25T22:30')];
+    expect(visibleHourRange(later, [day])).toEqual([5, 19]);
   });
 });

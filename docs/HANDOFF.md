@@ -417,3 +417,17 @@
 - Login throttling and passkey challenges are in memory (single process).
 - Offline mutations are refused, not queued. The SW does not cache API responses.
 - `register webhook` was never run against the real LinkTap API.
+
+## Phase 9: review fixes
+
+Fixed (all with regression tests):
+- Scheduler: `pickNext` skips runs of disabled schedules ("Schedule turned off"); `rematerialize` also skips weather-checked planned rows when a schedule is disabled, or moved (`cancelStarted`, rrule/dtstart/timezone edits) so the rest of an occurrence can't water on top of a new plan.
+- Stop vs. verify: `SchedulerEngine.noteStop(deviceId)` (called by `POST /devices/:id/stop`) aborts a launch still in `startVerified` (`StartAbortedError`, planned run becomes `cancelled` "Stopped by you", no retry start, no run row).
+- `recordStart` adopts an open non-Hoseidon run (webhook/poll) started within 60 s instead of closing it, so there is one run, not a phantom plus a real one.
+- Login throttling is per client (8 failures / 15 min), global cap 100. Client = `CF-Connecting-IP` / `X-Forwarded-For` only when `TRUST_PROXY=true`, else the socket address. Set `TRUST_PROXY=true` behind a tunnel.
+- With `LINKTAP_MOCK=false`, `index.ts` refuses to start if ADMIN_PASSWORD (<12), WEBHOOK_SECRET or SESSION_SECRET (<16) is a `.env.example` placeholder or too short (`insecureConfig` in `config.ts`). Removing ADMIN_PASSWORD now deletes the stored hash and sessions.
+- LinkTap rate-limit memory persists in the `settings` table (`linktap.lastCall`, real API only; `RateLimiter` takes a `LastCallStore`), so restarts don't re-hit getAllDevices.
+- `POST /linktap/test` ingests the devices it fetched.
+- Web: week view fits its hour range to the scheduled blocks ("Show full day" toggle) and shows compact dot + time chips in narrow lanes; Home tile is "Finished today", Skip is always visible; ET0 has its own hidden scale; flow axis shows the unit once; Network collapses timers with fewer than 2 samples into one row.
+
+Known gaps: webhook `wateringOn` adoption is a 60 s heuristic; Devices-page plan-conflict banner does not yet link to the zone; analytics heatmap sizing not changed.
