@@ -22,12 +22,13 @@ keeps your lawn alive without a single "Oops, something went wrong" toast.
 > Hoseidon is under construction. Checked items exist today; the rest is on the roadmap.
 
 - [x] Monorepo scaffold, Docker image, CI
+- [x] A mock LinkTap server so you can develop without flooding your yard
+- [x] LinkTap client with a rate-limit queue, a poller, a webhook receiver and a REST API
 - [ ] Device and network monitoring (gateways, timers, battery, signal, alarms)
 - [ ] A real scheduler (RRULE-based, run one zone at a time, skips for rain, freeze and wind)
 - [ ] Google Calendar sync
 - [ ] Per-sprinkler analytics next to weather (rain, ET0, soil moisture)
 - [ ] Installable PWA with push notifications for alarms and offline devices
-- [ ] A mock LinkTap server so you can develop without flooding your yard
 
 ## Stack
 
@@ -76,6 +77,13 @@ Calendar API, and creating an OAuth client with the `calendar.app.created` scope
 
 _Coming soon._ This section will cover creating a tunnel, setting `CLOUDFLARE_TUNNEL_TOKEN`, and
 starting the optional profile with `docker compose --profile tunnel up -d`.
+
+### LinkTap webhooks
+
+Set `WEBHOOK_SECRET` to a long random string, then register
+`${PUBLIC_URL}/hooks/linktap/${WEBHOOK_SECRET}` with LinkTap's `setWebHookUrl`. Leaving the secret
+blank disables the endpoint. See [docs/linktap-api.md](docs/linktap-api.md) for everything the
+LinkTap API can (and can't) do.
 
 ## Safety note
 
