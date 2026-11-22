@@ -22,6 +22,8 @@ ENV NODE_ENV=production \
 WORKDIR /app
 COPY --from=build /out/node_modules ./node_modules
 COPY --from=build /repo/apps/server/dist ./dist
+# Drizzle migrations, applied on boot (resolved as ../drizzle from dist/index.js).
+COPY --from=build /repo/apps/server/drizzle ./drizzle
 COPY --from=build /repo/apps/web/dist ./web
 RUN mkdir -p /data && chown node:node /data
 USER node
