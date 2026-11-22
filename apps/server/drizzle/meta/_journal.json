@@ -22,6 +22,13 @@
       "when": 1795311581247,
       "tag": "0002_weather",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "6",
+      "when": 1795313189053,
+      "tag": "0003_gcal",
+      "breakpoints": true
     }
   ]
 }

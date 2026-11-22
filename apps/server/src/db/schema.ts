@@ -255,3 +255,37 @@ export const weatherDaily = sqliteTable(
 );
 
 export type WeatherDailyRow = typeof weatherDaily.$inferSelect;
+
+/**
+ * Google Calendar connection (phase 6). A single row (id = 1). The calendar id outlives a
+ * disconnect, so reconnecting the same Google account picks up the same calendar and events.
+ */
+export const gcalAccount = sqliteTable('gcal_account', {
+  id: integer('id').primaryKey(),
+  /** AES-256-GCM ciphertext (see gcal/crypto.ts). Null when disconnected. */
+  refreshTokenEnc: text('refresh_token_enc'),
+  scope: text('scope'),
+  calendarId: text('calendar_id'),
+  connectedAt: ts('connected_at'),
+  /** Google rejected the refresh token (revoked, or Testing-mode 7-day expiry). */
+  needsReconnect: integer('needs_reconnect', { mode: 'boolean' }).notNull().default(false),
+  lastSyncAt: ts('last_sync_at'),
+  lastError: text('last_error'),
+  updatedAt: ts('updated_at').notNull(),
+});
+
+/** What we last pushed to Google, per synced item, so a sync only sends what changed. */
+export const gcalEvents = sqliteTable('gcal_events', {
+  /** "schedule:<id>", "skip:<scheduleId>:<iso>", "occ:<scheduleId>:<iso>" or "run:<id>". */
+  key: text('key').primaryKey(),
+  kind: text('kind').$type<'schedule' | 'skip' | 'log'>().notNull(),
+  /** Google event id (an instance id for skips). Null when a skip found no instance. */
+  eventId: text('event_id'),
+  hash: text('hash').notNull(),
+  /** When the item happens; old skip/log items fall out of the sync window and are left alone. */
+  at: ts('at'),
+  syncedAt: ts('synced_at').notNull(),
+});
+
+export type GcalAccountRow = typeof gcalAccount.$inferSelect;
+export type GcalEventRow = typeof gcalEvents.$inferSelect;

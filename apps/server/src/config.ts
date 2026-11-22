@@ -10,6 +10,8 @@ const envSchema = z.object({
   LINKTAP_API_KEY: z.string().default(''),
   SESSION_SECRET: z.string().default(''),
   ADMIN_PASSWORD: z.string().default(''),
+  GOOGLE_CLIENT_ID: z.string().default(''),
+  GOOGLE_CLIENT_SECRET: z.string().default(''),
   PUBLIC_URL: z.string().default('http://localhost:8787'),
   WEBHOOK_SECRET: z.string().default(''),
   WEB_DIST: z.string().default('../web/dist'),
