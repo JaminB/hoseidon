@@ -228,3 +228,30 @@ export type NewEvent = typeof events.$inferInsert;
 export type ScheduleRow = typeof schedules.$inferSelect;
 export type PlannedRunRow = typeof plannedRuns.$inferSelect;
 export type NewPlannedRun = typeof plannedRuns.$inferInsert;
+
+/**
+ * Daily weather per location (lat/lon rounded to 2 decimals, so gateways in the same yard share
+ * rows). Forecast rows are refreshed; archive rows are final.
+ */
+export const weatherDaily = sqliteTable(
+  'weather_daily',
+  {
+    /** "lat,lon" rounded to 2 decimals, e.g. "40.71,-74.01". */
+    locationKey: text('location_key').notNull(),
+    /** Local date at the location, "YYYY-MM-DD". */
+    date: text('date').notNull(),
+    rainMm: real('rain_mm'),
+    rainProbPct: real('rain_prob_pct'),
+    et0Mm: real('et0_mm'),
+    tMaxC: real('t_max_c'),
+    tMinC: real('t_min_c'),
+    windMaxKph: real('wind_max_kph'),
+    soilMoisture: real('soil_moisture'),
+    /** 'forecast' rows are provisional; 'archive' rows are observed values and never refetched. */
+    source: text('source').$type<'forecast' | 'archive'>().notNull(),
+    fetchedAt: ts('fetched_at').notNull(),
+  },
+  (t) => [uniqueIndex('weather_daily_loc_date_idx').on(t.locationKey, t.date)],
+);
+
+export type WeatherDailyRow = typeof weatherDaily.$inferSelect;

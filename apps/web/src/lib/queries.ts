@@ -19,6 +19,9 @@ export const keys = {
   preview: (from: Date, to: Date) => ['preview', from.toISOString(), to.toISOString()] as const,
   plannedRuns: (from: Date, to: Date) =>
     ['planned-runs', from.toISOString(), to.toISOString()] as const,
+  weather: (gatewayId: string, from: string, to: string) =>
+    ['weather', gatewayId, from, to] as const,
+  analytics: (target: string, from: string, to: string) => ['analytics', target, from, to] as const,
   events: ['events'] as const,
   linktapStatus: ['linktap-status'] as const,
 };
@@ -313,3 +316,25 @@ export function useSkipPlannedRun() {
     onSettled: () => void qc.invalidateQueries({ queryKey: ['planned-runs'] }),
   });
 }
+
+// ---- weather + analytics -------------------------------------------------------------------------
+
+/** Daily weather for a gateway. The server caches it, so this is cheap to keep fresh. */
+export const useWeather = (gatewayId: string | undefined, from: string, to: string) =>
+  useQuery({
+    queryKey: keys.weather(gatewayId ?? '', from, to),
+    queryFn: () => api.weather(gatewayId!, from, to),
+    enabled: !!gatewayId,
+    staleTime: 15 * 60_000,
+    placeholderData: (prev) => prev,
+  });
+
+/** Usage analytics for one device, or every device when `target` is "all". */
+export const useAnalytics = (target: string, from: string, to: string) =>
+  useQuery({
+    queryKey: keys.analytics(target, from, to),
+    queryFn: () =>
+      target === 'all' ? api.analyticsSummary(from, to) : api.deviceAnalytics(target, from, to),
+    staleTime: 60_000,
+    placeholderData: (prev) => prev,
+  });

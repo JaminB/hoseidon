@@ -12,7 +12,7 @@ const SettingsPage = lazy(() =>
   import('./pages/settings').then((m) => ({ default: m.SettingsPage })),
 );
 const AnalyticsPage = lazy(() =>
-  import('./pages/placeholders').then((m) => ({ default: m.AnalyticsPage })),
+  import('./pages/analytics').then((m) => ({ default: m.AnalyticsPage })),
 );
 const NetworkPage = lazy(() =>
   import('./pages/placeholders').then((m) => ({ default: m.NetworkPage })),

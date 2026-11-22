@@ -14,6 +14,7 @@ import { useMemo } from 'react';
 import { Link } from 'react-router';
 import { QuickRun, useRemaining } from '../components/devices/device-controls';
 import { Page, PageHeader } from '../components/layout/app-shell';
+import { WeatherStrip } from '../components/weather-strip';
 import { Badge } from '../components/ui/badge';
 import { Button } from '../components/ui/button';
 import { Card, SectionLabel } from '../components/ui/card';
@@ -105,6 +106,8 @@ export function HomePage() {
           }
         />
       </Card>
+
+      <WeatherStrip now={now} />
 
       <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_340px]">
         <div className="min-w-0 space-y-6">

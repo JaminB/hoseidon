@@ -19,6 +19,7 @@ const VIEWPORTS = [
   { name: 'desktop', width: 1440, height: 900 },
 ] as const;
 
+const TZ = 'America/New_York';
 const SCHEMES = ['light', 'dark'] as const;
 
 // Mock LinkTap ids (apps/server/src/linktap/mock.ts).
@@ -48,6 +49,11 @@ async function seed(request: APIRequestContext) {
       timeout: 15_000,
     })
     .toBeGreaterThan(0);
+  // One gateway gets a location, so weather and analytics have something to show.
+  const located = await request.patch('/api/gateways/A1B2C3D4E5F60001', {
+    data: { lat: 40.71, lon: -74.01, timezone: TZ },
+  });
+  expect(located.ok(), await located.text()).toBe(true);
   const existing = (await (await request.get('/api/schedules')).json()) as unknown[];
   if (existing.length) return;
 
@@ -194,5 +200,31 @@ test.describe('interactions', () => {
     await expect(page.getByRole('dialog')).toBeVisible();
     await page.waitForTimeout(350);
     await page.screenshot({ path: 'e2e/__screenshots__/devices-gateway-sheet-desktop-light.png' });
+  });
+});
+
+test.describe('analytics', () => {
+  test.use({ viewport: { width: 1440, height: 900 } });
+
+  test('charts render against the weather and the range can change', async ({ page }) => {
+    await page.goto('/analytics');
+    await expect(page.getByText('Water used vs. rain and ET₀')).toBeVisible();
+    // Recharts draws real SVG: water and rain bars plus the ET0 line.
+    await expect(page.locator('.recharts-bar-rectangle').first()).toBeVisible();
+    await expect(page.locator('.recharts-line-curve').first()).toBeVisible();
+    await expect(page.getByText('Weather data by Open-Meteo.com (CC BY 4.0)')).toBeVisible();
+    await page.getByRole('radio', { name: '1y' }).click();
+    await expect(page.getByText('Calendar')).toBeVisible();
+    await page.waitForLoadState('networkidle');
+    await page.waitForTimeout(300);
+    await page.screenshot({
+      path: 'e2e/__screenshots__/analytics-1y-desktop-light.png',
+      fullPage: true,
+    });
+  });
+
+  test('Home shows the forecast strip', async ({ page }) => {
+    await page.goto('/');
+    await expect(page.getByText('Weather data by Open-Meteo.com (CC BY 4.0)')).toBeVisible();
   });
 });
