@@ -508,6 +508,28 @@ describe('SchedulerEngine', () => {
       expect(startCalls(h)).toHaveLength(0);
     });
 
+    it('does not adopt an unrelated run that started later', async () => {
+      const h = await setup();
+      await interrupted(h);
+      // Someone ran the zone by hand 4 minutes later: not this launch.
+      h.db
+        .insert(runs)
+        .values({
+          deviceId: MOCK_IDS.frontLawn,
+          startedAt: at(4),
+          plannedSec: 1800,
+          source: 'manual',
+          status: 'running',
+        })
+        .run();
+      const fresh = new SchedulerEngine({ db: h.db, executor: h.executor });
+      vi.setSystemTime(at(6));
+      await fresh.tick();
+      expect(planned(h)[0]).toMatchObject({ status: 'failed', runId: null });
+      const manual = h.db.select().from(runs).where(eq(runs.source, 'manual')).get();
+      expect(manual).toMatchObject({ plannedSec: 1800, scheduleId: null });
+    });
+
     it('adopts the run LinkTap reports, and flags it', async () => {
       const h = await setup();
       const row = await interrupted(h);

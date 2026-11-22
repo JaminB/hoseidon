@@ -133,6 +133,23 @@ describe('BrainCore alarm wheel', () => {
     expect(db.select().from(timers).all()).toEqual([]);
   });
 
+  it('retries a failing one-off timer a few times, then drops it', async () => {
+    const { db, make } = setup();
+    const brain = make();
+    let calls = 0;
+    brain.services.poller.reconcileHistory = async () => {
+      calls++;
+      throw new Error('boom');
+    };
+    brain.wheel.schedule(`reconcile:${MOCK_IDS.frontLawn}`, new Date(T0));
+    for (let i = 0; i < 5; i++) {
+      vi.setSystemTime(T0 + i * MIN);
+      await brain.wheel.runDue(Date.now());
+    }
+    expect(calls).toBe(3);
+    expect(db.select().from(timers).all()).toEqual([]);
+  });
+
   it('ticks the engine every 30 s around a planned run, every 5 min otherwise', async () => {
     const { make } = setup();
     const brain = make();
@@ -238,6 +255,29 @@ describe('BrainCore requests', () => {
     for (let i = 0; i < 8; i++) expect((await wrong(brain)).status).toBe(401);
     const revived = make();
     expect((await wrong(revived)).status).toBe(429);
+  });
+
+  it('counts body bytes as they are read, whatever Content-Length says', async () => {
+    const { make } = setup();
+    const brain = make();
+    const chunk = new Uint8Array(64 * 1024).fill(32);
+    let sent = 0;
+    const body = new ReadableStream<Uint8Array>({
+      pull(c) {
+        if (sent++ < 8) c.enqueue(chunk);
+        else c.close();
+      },
+    });
+    const res = await brain.fetch(
+      new Request(`${ORIGIN}/api/auth/login`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', [CSRF_HEADER]: '1' },
+        body,
+        duplex: 'half',
+      } as RequestInit),
+    );
+    expect(res.status).toBe(413);
+    expect(sent).toBeLessThan(8); // gave up reading early
   });
 
   it('a webhook makes push due, and moves the alarm earlier', async () => {

@@ -1,4 +1,4 @@
-import { and, asc, eq, gte, inArray, isNotNull, isNull, lt } from 'drizzle-orm';
+import { and, asc, eq, gte, inArray, isNotNull, isNull, lt, lte, ne, or } from 'drizzle-orm';
 import type { PlannedRunStatus, RunStatus } from '@hoseidon/shared';
 import type { Db } from '../db/types';
 import {
@@ -53,6 +53,8 @@ const RUN_TO_PLANNED: Record<RunStatus, PlannedRunStatus> = {
   failed: 'failed',
   skipped: 'skipped',
 };
+/** How long after claiming a slot its start can still go out (lane waits, retries, re-send). */
+const LAUNCH_WINDOW_MS = 2 * 60_000;
 /** Planned rows this old are history; the engine only looks at newer occurrences. */
 const LOOKBACK_MS = 2 * 86_400_000;
 
@@ -241,17 +243,27 @@ export class SchedulerEngine {
   }
 
   private settleInterrupted(tx: Db, p: PlannedRunRow, now: Date): void {
-    const seen = tx
+    // Only a run that can be this launch: started within the launch window (a start, rate-limit
+    // retries and one re-send fit in 2 min), not someone else's (no schedule, not ours), and with
+    // our duration if it has one. Anything else, or more than one candidate, is not adopted.
+    const claimedAt = p.updatedAt.getTime();
+    const candidates = tx
       .select()
       .from(runs)
       .where(
         and(
           eq(runs.deviceId, p.deviceId),
-          gte(runs.startedAt, new Date(p.updatedAt.getTime() - 5_000)),
+          gte(runs.startedAt, new Date(claimedAt - 5_000)),
+          lte(runs.startedAt, new Date(claimedAt + LAUNCH_WINDOW_MS)),
+          ne(runs.source, 'hoseidon'),
+          isNull(runs.scheduleId),
+          or(isNull(runs.plannedSec), eq(runs.plannedSec, p.seconds)),
         ),
       )
       .orderBy(asc(runs.startedAt))
-      .get();
+      .limit(2)
+      .all();
+    const seen = candidates.length === 1 ? candidates[0] : undefined;
     if (!seen) {
       update(tx, p.id, { status: 'failed', error: 'Interrupted while starting' }, now);
       return;

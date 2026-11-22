@@ -1,4 +1,7 @@
+import { createDecipheriv, createECDH, hkdfSync } from 'node:crypto';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { createServer, type IncomingHttpHeaders, type Server } from 'node:http';
+import type { AddressInfo } from 'node:net';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -7,7 +10,8 @@ import { createTestHarness } from 'wrangler';
 /**
  * Smoke test of the real Worker + Brain Durable Object in local workerd (wrangler's test
  * harness, Miniflare underneath), with LINKTAP_MOCK=true. Nothing leaves the machine, nothing
- * binds port 8787, and the real LinkTap API is never called.
+ * binds port 8787, and the real LinkTap API is never called. Each test signs in and waits for
+ * the first poll itself (memoized), so any test can run on its own.
  */
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -58,14 +62,13 @@ const server = createTestHarness({
 });
 
 let base = '';
-let cookie = '';
 
 async function sql<T>(query: string): Promise<T[]> {
   const storage = await server.getWorker().getDurableObjectStorage('Brain', { name: 'brain' });
   return (await storage.exec(query)) as T[];
 }
 
-async function until<T>(fn: () => Promise<T | undefined>, ms = 15_000): Promise<T> {
+async function until<T>(fn: () => Promise<T | undefined> | T | undefined, ms = 15_000): Promise<T> {
   const end = Date.now() + ms;
   for (;;) {
     const v = await fn();
@@ -75,7 +78,76 @@ async function until<T>(fn: () => Promise<T | undefined>, ms = 15_000): Promise<
   }
 }
 
+/** Signed in once, on first use. */
+let session: Promise<string> | undefined;
+const login = () =>
+  (session ??= (async () => {
+    const res = await server.fetch('/api/auth/login', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', origin: base, ...CSRF },
+      body: JSON.stringify({ password: PASSWORD }),
+    });
+    expect(res.status).toBe(200);
+    return res.headers.get('set-cookie')!.split(';')[0]!;
+  })());
+
+/** Gateways, once the alarm (armed by the first request, nothing else) has polled LinkTap. */
+let polled: Promise<{ id: string; devices: unknown[] }[]> | undefined;
+const firstPoll = () =>
+  (polled ??= (async () => {
+    const cookie = await login();
+    return until(async () => {
+      const r = await server.fetch('/api/gateways', { headers: { cookie } });
+      expect(r.status).toBe(200);
+      const list = (await r.json()) as { id: string; devices: unknown[] }[];
+      return list.length ? list : undefined;
+    });
+  })());
+
+/** RFC 8291 Appendix A browser keys: the test knows the private key, so it can decrypt. */
+const UA = {
+  private: 'q1dXpw3UpT5VOmu_cf_v6ih07Aems3njxI-JWgLcM94',
+  public: 'BCVxsr7N_eNgVRqvHtD0zTZsEc6-VV-JvLexhqUzORcxaOzi6-AYWXvTBHm4bjyPjs7Vd8pZGH6SRpkNtoIAiw4',
+  auth: 'BTBZMqHH6r4Tts7J_aSIgg',
+};
+
+/** RFC 8291 decryption with node:crypto, as the browser would do it. */
+function decrypt(body: Buffer): string {
+  const salt = body.subarray(0, 16);
+  const idlen = body[20]!;
+  const asPublic = body.subarray(21, 21 + idlen);
+  const ct = body.subarray(21 + idlen);
+  const ecdh = createECDH('prime256v1');
+  ecdh.setPrivateKey(Buffer.from(UA.private, 'base64url'));
+  const info = Buffer.concat([Buffer.from('WebPush: info\0'), ecdh.getPublicKey(), asPublic]);
+  const secret = ecdh.computeSecret(asPublic);
+  const ikm = hkdfSync('sha256', secret, Buffer.from(UA.auth, 'base64url'), info, 32);
+  const cek = hkdfSync('sha256', ikm, salt, 'Content-Encoding: aes128gcm\0', 16);
+  const nonce = hkdfSync('sha256', ikm, salt, 'Content-Encoding: nonce\0', 12);
+  const d = createDecipheriv('aes-128-gcm', Buffer.from(cek), Buffer.from(nonce));
+  d.setAuthTag(ct.subarray(-16));
+  const plain = Buffer.concat([d.update(ct.subarray(0, -16)), d.final()]);
+  return plain.subarray(0, -1).toString('utf8');
+}
+
+/** A local stand-in for a browser push service (127.0.0.1, random port). */
+const pushes: { headers: IncomingHttpHeaders; body: Buffer }[] = [];
+let sink: Server | undefined;
+let sinkUrl = '';
+
 beforeAll(async () => {
+  const s = createServer((req, res) => {
+    const chunks: Buffer[] = [];
+    req.on('data', (c: Buffer) => chunks.push(c));
+    req.on('end', () => {
+      pushes.push({ headers: req.headers, body: Buffer.concat(chunks) });
+      res.writeHead(201).end();
+    });
+  });
+  sink = s;
+  await new Promise<void>((r) => s.listen(0, '127.0.0.1', r));
+  sinkUrl = `http://127.0.0.1:${(s.address() as AddressInfo).port}/push/abc`;
+
   const { url } = await server.listen();
   expect(url.port).not.toBe('8787');
   base = url.origin;
@@ -83,6 +155,7 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await server.close();
+  await new Promise((r) => (sink ? sink.close(r) : r(undefined)));
 });
 
 describe('Worker (local workerd, mock LinkTap)', () => {
@@ -123,29 +196,19 @@ describe('Worker (local workerd, mock LinkTap)', () => {
   });
 
   it('logs in (PBKDF2 in workerd) and lists gateways once the alarm has polled', async () => {
-    const res = await server.fetch('/api/auth/login', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json', origin: base, ...CSRF },
-      body: JSON.stringify({ password: PASSWORD }),
-    });
-    expect(res.status).toBe(200);
-    cookie = res.headers.get('set-cookie')!.split(';')[0]!;
+    expect(await login()).toMatch(/^hoseidon_session=/);
     const [hash] = await sql<{ value: string }>(
       "select value from settings where key = 'auth.passwordHash'",
     );
     expect(hash?.value).toMatch(/^pbkdf2\$25000\$/);
-
     // Nobody called the poller: the alarm armed on the first request does the first poll.
-    const gateways = await until(async () => {
-      const r = await server.fetch('/api/gateways', { headers: { cookie } });
-      expect(r.status).toBe(200);
-      const list = (await r.json()) as { id: string; devices: unknown[] }[];
-      return list.length ? list : undefined;
-    });
+    const gateways = await firstPoll();
     expect(gateways[0]!.devices.length).toBeGreaterThan(0);
   });
 
   it('keeps sessions and LinkTap limits across a Durable Object eviction', async () => {
+    const cookie = await login();
+    await firstPoll();
     const before = await sql<{ value: string }>(
       "select value from settings where key = 'linktap.lastCall'",
     );
@@ -164,6 +227,7 @@ describe('Worker (local workerd, mock LinkTap)', () => {
   });
 
   it('runs WebAuthn options and VAPID key generation inside workerd', async () => {
+    const cookie = await login();
     const opts = await server.fetch('/api/auth/passkey/register/options', {
       method: 'POST',
       headers: { cookie, origin: base, ...CSRF },
@@ -178,19 +242,12 @@ describe('Worker (local workerd, mock LinkTap)', () => {
     expect(publicKey).toMatch(/^B[A-Za-z0-9_-]{86}$/); // 65-byte uncompressed P-256 point
   });
 
-  it('encrypts and sends a push from workerd (to a local sink, nothing leaves the box)', async () => {
+  it('encrypts and sends a push from workerd that a browser could decrypt', async () => {
+    const cookie = await login();
     const sub = await server.fetch('/api/push/subscribe', {
       method: 'POST',
       headers: { 'content-type': 'application/json', cookie, origin: base, ...CSRF },
-      body: JSON.stringify({
-        // RFC 8291's example browser keys; the endpoint is this Worker, which answers 404.
-        endpoint: `${base}/hooks/push-sink`,
-        keys: {
-          p256dh:
-            'BCVxsr7N_eNgVRqvHtD0zTZsEc6-VV-JvLexhqUzORcxaOzi6-AYWXvTBHm4bjyPjs7Vd8pZGH6SRpkNtoIAiw4',
-          auth: 'BTBZMqHH6r4Tts7J_aSIgg',
-        },
-      }),
+      body: JSON.stringify({ endpoint: sinkUrl, keys: { p256dh: UA.public, auth: UA.auth } }),
     });
     expect(sub.status).toBe(200);
     const res = await server.fetch('/api/push/test', {
@@ -198,11 +255,17 @@ describe('Worker (local workerd, mock LinkTap)', () => {
       headers: { cookie, origin: base, ...CSRF },
     });
     expect(res.status).toBe(200);
-    // The sink refused it (404), so it counts as failed, but encryption and VAPID ran.
-    expect(await res.json()).toEqual({ sent: 0, failed: 1 });
+    expect(await res.json()).toEqual({ sent: 1, failed: 0 });
+    expect(pushes).toHaveLength(1);
+    const push = pushes[0]!;
+    expect(push.headers['content-encoding']).toBe('aes128gcm');
+    expect(push.headers.authorization).toMatch(/^vapid t=[\w-]+\.[\w-]+\.[\w-]+, k=B[\w-]{86}$/);
+    expect(JSON.parse(decrypt(push.body))).toMatchObject({ title: 'Hoseidon', tag: 'test' });
   });
 
   it('creates a schedule and plans its runs (rrule + Intl time zones in workerd)', async () => {
+    const cookie = await login();
+    await firstPoll();
     const res = await server.fetch('/api/schedules', {
       method: 'POST',
       headers: { 'content-type': 'application/json', cookie, origin: base, ...CSRF },
@@ -232,8 +295,19 @@ describe('Worker (local workerd, mock LinkTap)', () => {
     expect((await hook('w'.repeat(32))).status).toBe(200);
   });
 
-  it('the cron watchdog finds a live alarm', async () => {
+  it('the cron watchdog asks the Brain for its alarm', async () => {
+    await firstPoll();
+    server.clearLogs();
     const result = await server.getWorker().scheduled({ cron: '*/10 * * * *' });
     expect(result.outcome).toBe('ok');
+    // ensureAlarm really ran in the Brain and reported a live alarm.
+    const line = await until(() =>
+      server
+        .getLogs()
+        .map((l) => l.message)
+        .find((m) => m.includes('watchdog: alarm at')),
+    );
+    const at = Date.parse(/alarm at (\S+)/.exec(line)![1]!);
+    expect(at).toBeGreaterThan(Date.now() - 2 * 60_000);
   });
 });

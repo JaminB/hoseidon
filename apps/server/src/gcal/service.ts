@@ -23,7 +23,9 @@ import {
   TokenSource,
   type OAuthClient,
 } from './oauth';
-import { applyOps, buildDesired, CalendarGoneError, diffSync, WINDOW_MS } from './sync';
+import { applyOps, buildDesired, CalendarGoneError, diffSync, WINDOW_MS, type Op } from './sync';
+
+const opKey = (op: Op) => (op.type === 'delete' ? op.row.key : op.item.key);
 
 const LOG_RUNS_KEY = 'gcal.logRuns';
 const STATE_TTL_MS = 10 * 60_000;
@@ -83,6 +85,8 @@ export class GcalService {
   private interval: ReturnType<typeof setInterval> | null = null;
   private running: Promise<void> | null = null;
   private lastPeriodicAt: number | null = null;
+  /** External mode: items Google rejected (400) last time; they go to the back of the line. */
+  private readonly rejected = new Set<string>();
   private dirty = false;
   private failures = 0;
   private inBackoff = false;
@@ -505,15 +509,32 @@ export class GcalService {
         },
       });
       try {
+        // External mode applies a slice per pass. Items Google rejected last time go last, so
+        // they can't hog the slice and starve independent changes; and leftovers that are only
+        // rejected items wait for the periodic pass instead of looping straight away.
+        const perPass = this.opts.opsPerPass ?? 20;
+        const ordered = this.external
+          ? [
+              ...ops.filter((op) => !this.rejected.has(opKey(op))),
+              ...ops.filter((op) => this.rejected.has(opKey(op))),
+            ]
+          : ops;
+        const batch = this.external ? ordered.slice(0, perPass) : ops;
         const { errors, again } = await applyOps(
           this.db,
           api,
           calendarId,
-          this.external ? ops.slice(0, this.opts.opsPerPass ?? 20) : ops,
+          batch,
           desired,
           this.now,
         );
-        if (this.external && ops.length > (this.opts.opsPerPass ?? 20)) this.dirty = true;
+        if (this.external) {
+          for (const op of batch) this.rejected.delete(opKey(op));
+          for (const e of errors) this.rejected.add(e.key);
+          if (ordered.slice(perPass).some((op) => !this.rejected.has(opKey(op)))) {
+            this.dirty = true;
+          }
+        }
         if (again) this.dirty = true;
         this.saveAccount({
           lastSyncAt: this.now(),

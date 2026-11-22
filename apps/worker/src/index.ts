@@ -66,6 +66,14 @@ export default {
   },
 
   async scheduled(_controller, env, ctx) {
-    ctx.waitUntil(brain(env).ensureAlarm());
+    ctx.waitUntil(
+      brain(env)
+        .ensureAlarm()
+        .then(({ alarmAt, rearmed }) =>
+          console.log(
+            `watchdog: alarm at ${alarmAt === null ? 'none' : new Date(alarmAt).toISOString()}${rearmed ? ' (re-armed)' : ''}`,
+          ),
+        ),
+    );
   },
 } satisfies ExportedHandler<Env>;

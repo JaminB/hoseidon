@@ -114,16 +114,18 @@ export class AuthService {
       const retryAfterSec = Math.ceil((throttledBy[0]! + FAILURE_WINDOW_MS - now) / 1000);
       return { ok: false, reason: 'throttled', retryAfterSec };
     }
+    // Count the attempt before the (async) password check, so concurrent attempts each see the
+    // ones still in flight and can't slip past the limits together. A success clears it.
+    putEphemeral(
+      this.o.db,
+      FAIL_PREFIX + client,
+      JSON.stringify([...mine, now]),
+      new Date(now + FAILURE_WINDOW_MS),
+    );
     if (!(await verifyPassword(password, stored))) {
-      putEphemeral(
-        this.o.db,
-        FAIL_PREFIX + client,
-        JSON.stringify([...mine, now]),
-        new Date(now + FAILURE_WINDOW_MS),
-      );
       return { ok: false, reason: 'invalid' };
     }
-    if (mine.length) deleteEphemeral(this.o.db, FAIL_PREFIX + client);
+    deleteEphemeral(this.o.db, FAIL_PREFIX + client);
     return { ok: true, ...this.createSession() };
   }
 

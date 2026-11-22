@@ -531,7 +531,7 @@ Real 1-minute instant runs on a 4-outlet ValveLinker. Details in `docs/linktap-a
   `LINKTAP_MOCK=true`), `src/index.ts` (Worker + `Brain`), `src/edge.ts` (CSRF/Origin/body-size
   checks before a DO request is spent), `scripts/gen-migrations.mjs` → `src/migrations.gen.ts`,
   `src/worker-configuration.d.ts` (`wrangler types`), `.dev.vars.example`. Scripts: `dev`
-  (workerd on :8799), `build` (= `wrangler deploy --dry-run --outdir dist`), `deploy`, `types`,
+  (workerd on :8799), `build` (checks `migrations.gen.ts` is fresh, then `wrangler deploy --dry-run --outdir dist`), `deploy`, `types`,
   `gen`, `test`.
 - `apps/server/src/runtime/`: `wheel.ts` (the alarm's timer wheel: due times from persisted
   state, priority order, work budget per wake, `timers` table for one-offs) and `brain.ts`
@@ -580,3 +580,24 @@ Real 1-minute instant runs on a 4-outlet ValveLinker. Details in `docs/linktap-a
   the Google OAuth/Calendar path and `SecretBox` were not run in workerd.
 - `@cloudflare/vitest-pool-workers` was not used (needs vitest 4, pins wrangler 4.124); the
   workerd tests use wrangler's `createTestHarness` instead.
+
+**Review pass (CodeRabbit on PR #13)**
+
+- Login records the attempt before the async password check, so a burst of parallel wrong
+  passwords can't slip past the per-client or global limit.
+- The Brain counts body bytes as it reads them (`limitBody`: 256 KB API, 16 KB hooks), whatever
+  Content-Length says; the edge still refuses an oversized declared length for free.
+- Workers invocation logs are off (`observability.logs.invocation_logs: false`): they record the
+  URL, and the webhook secret is in its path.
+- An interrupted launch only adopts a run that started within 2 min of the claim, isn't ours,
+  has no schedule, has our duration (or none), and is the only such run.
+- One-off timers are deleted after their handler succeeds; a failure retries after 1 min, 3
+  attempts in all.
+- gcal (external mode): items Google rejected go to the back of the next slice, and leftovers
+  that are only rejected items wait for the periodic pass.
+- `RateLimiter`: a failing store write fails that call cleanly instead of hanging the queue.
+- Web Push: records stay strictly below rs = 4096. `ephemeral` has an index on `expires_at`
+  (folded into the unreleased migration 0006). `.dev.vars` is kept out of the Docker context.
+- README: real taps stay on Node until phases D and F.
+- The workerd smoke test now decrypts a real push captured by a local sink, checks the cron's
+  `ensureAlarm` via its log line, and each test sets up its own login and first poll.

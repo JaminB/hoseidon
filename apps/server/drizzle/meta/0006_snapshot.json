@@ -1,7 +1,7 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "0a49a63a-7fcb-4c6c-b607-2ef1f7e7417e",
+  "id": "de895d62-c385-44d7-ac21-cabdec402459",
   "prevId": "4dcce145-81de-4ba2-99bb-e0719c9da63d",
   "tables": {
     "device_snapshots": {
@@ -330,7 +330,15 @@
           "autoincrement": false
         }
       },
-      "indexes": {},
+      "indexes": {
+        "ephemeral_expires_idx": {
+          "name": "ephemeral_expires_idx",
+          "columns": [
+            "expires_at"
+          ],
+          "isUnique": false
+        }
+      },
       "foreignKeys": {},
       "compositePrimaryKeys": {},
       "uniqueConstraints": {},

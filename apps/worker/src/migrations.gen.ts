@@ -50,7 +50,7 @@ export default {
       {
         "idx": 6,
         "version": "6",
-        "when": 1795363812080,
+        "when": 1795367456613,
         "tag": "0006_durable_state",
         "breakpoints": true
       }
@@ -63,6 +63,6 @@ export default {
     "m0003": "CREATE TABLE `gcal_account` (\n\t`id` integer PRIMARY KEY NOT NULL,\n\t`refresh_token_enc` text,\n\t`scope` text,\n\t`calendar_id` text,\n\t`connected_at` integer,\n\t`needs_reconnect` integer DEFAULT false NOT NULL,\n\t`last_sync_at` integer,\n\t`last_error` text,\n\t`updated_at` integer NOT NULL\n);\n--> statement-breakpoint\nCREATE TABLE `gcal_events` (\n\t`key` text PRIMARY KEY NOT NULL,\n\t`kind` text NOT NULL,\n\t`event_id` text,\n\t`hash` text NOT NULL,\n\t`at` integer,\n\t`synced_at` integer NOT NULL\n);\n",
     "m0004": "CREATE TABLE `passkeys` (\n\t`id` text PRIMARY KEY NOT NULL,\n\t`name` text NOT NULL,\n\t`public_key` text NOT NULL,\n\t`counter` integer DEFAULT 0 NOT NULL,\n\t`transports` text,\n\t`created_at` integer DEFAULT (unixepoch() * 1000) NOT NULL,\n\t`last_used_at` integer\n);\n--> statement-breakpoint\nCREATE TABLE `push_subscriptions` (\n\t`endpoint` text PRIMARY KEY NOT NULL,\n\t`p256dh` text NOT NULL,\n\t`auth` text NOT NULL,\n\t`created_at` integer DEFAULT (unixepoch() * 1000) NOT NULL\n);\n--> statement-breakpoint\nCREATE TABLE `sessions` (\n\t`id` text PRIMARY KEY NOT NULL,\n\t`created_at` integer DEFAULT (unixepoch() * 1000) NOT NULL,\n\t`expires_at` integer NOT NULL\n);\n",
     "m0005": "ALTER TABLE `device_snapshots` ADD `flow_ml_per_min` real;--> statement-breakpoint\nALTER TABLE `devices` ADD `d_type` integer;--> statement-breakpoint\nALTER TABLE `devices` ADD `flow_meter` integer;--> statement-breakpoint\nALTER TABLE `devices` ADD `flow_ml_per_min` real;--> statement-breakpoint\nALTER TABLE `devices` ADD `plan` text;--> statement-breakpoint\nALTER TABLE `gateways` ADD `location_source` text;--> statement-breakpoint\nALTER TABLE `gateways` ADD `location_raw` text;--> statement-breakpoint\nALTER TABLE `gateways` ADD `location_resolved_for` text;--> statement-breakpoint\nALTER TABLE `gateways` ADD `version` text;--> statement-breakpoint\nALTER TABLE `runs` ADD `mode` text;--> statement-breakpoint\n-- Locations saved before automatic detection existed were set by hand.\nUPDATE `gateways` SET `location_source` = 'manual' WHERE `lat` IS NOT NULL AND `lon` IS NOT NULL;\n",
-    "m0006": "CREATE TABLE `ephemeral` (\n\t`key` text PRIMARY KEY NOT NULL,\n\t`value` text NOT NULL,\n\t`expires_at` integer NOT NULL\n);\n--> statement-breakpoint\nCREATE TABLE `timers` (\n\t`key` text PRIMARY KEY NOT NULL,\n\t`due_at` integer NOT NULL,\n\t`payload` text\n);\n"
+    "m0006": "CREATE TABLE `ephemeral` (\n\t`key` text PRIMARY KEY NOT NULL,\n\t`value` text NOT NULL,\n\t`expires_at` integer NOT NULL\n);\n--> statement-breakpoint\nCREATE INDEX `ephemeral_expires_idx` ON `ephemeral` (`expires_at`);--> statement-breakpoint\nCREATE TABLE `timers` (\n\t`key` text PRIMARY KEY NOT NULL,\n\t`due_at` integer NOT NULL,\n\t`payload` text\n);\n"
   }
 };

@@ -28,7 +28,8 @@
     // PUBLIC_URL: leave unset to use the first request's origin (the *.workers.dev URL), or set
     // it to your custom domain. GOOGLE_CLIENT_ID and TZ go here too.
   },
-  // Workers Logs is included in the Free plan (daily event cap; see docs/cloudflare.md).
-  "observability": { "enabled": true },
+  // Workers Logs is included in the Free plan (daily event cap). Invocation logs are off: they
+  // record request URLs, and the LinkTap webhook's secret is in its path. App logs stay on.
+  "observability": { "enabled": true, "logs": { "enabled": true, "invocation_logs": false } },
   "upload_source_maps": true,
 }

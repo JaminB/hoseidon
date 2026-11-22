@@ -64,6 +64,10 @@ export interface WheelOptions {
   log?: (msg: string) => void;
 }
 
+/** A failing one-off is retried this often, this many times in all. */
+const TIMER_RETRY_MS = 60_000;
+const TIMER_ATTEMPTS = 3;
+
 export class Wheel {
   constructor(private readonly o: WheelOptions) {}
 
@@ -96,13 +100,29 @@ export class Wheel {
       .limit(3)
       .all();
     for (const t of due) {
-      // Delete first: alarms are at-least-once, and each handler is safe to run twice anyway.
-      db.delete(timers).where(eq(timers.key, t.key)).run();
+      // Only this exact row: a handler may have scheduled a replacement under the same key.
+      const same = and(eq(timers.key, t.key), eq(timers.dueAt, t.dueAt));
       const [kind, arg] = splitKey(t.key);
-      if (kind === 'reconcile' && arg && this.o.engineEnabled) {
-        await poller.reconcileHistory(arg);
-      } else if (kind !== 'reconcile') {
-        this.o.log?.(`wheel: unknown timer ${t.key}`);
+      try {
+        if (kind === 'reconcile' && arg && this.o.engineEnabled) {
+          await poller.reconcileHistory(arg);
+        } else if (kind !== 'reconcile') {
+          this.o.log?.(`wheel: unknown timer ${t.key}`);
+        }
+        // Removed only once handled, so an eviction mid-handler runs it again (handlers are
+        // idempotent; alarms are at-least-once anyway).
+        db.delete(timers).where(same).run();
+      } catch (err) {
+        const attempts = ((t.payload as { attempts?: number } | null)?.attempts ?? 0) + 1;
+        this.o.log?.(`wheel: timer ${t.key} failed (${attempts}x): ${(err as Error).message}`);
+        if (attempts >= TIMER_ATTEMPTS) {
+          db.delete(timers).where(same).run();
+        } else {
+          db.update(timers)
+            .set({ dueAt: new Date(now + TIMER_RETRY_MS), payload: { attempts } })
+            .where(same)
+            .run();
+        }
       }
     }
   }

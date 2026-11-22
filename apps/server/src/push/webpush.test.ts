@@ -71,6 +71,14 @@ describe('encryptPayload (RFC 8291 aes128gcm)', () => {
     expect(decrypt(b, RFC8291.uaPrivate, RFC8291.authSecret)).toBe('{"title":"Hoseidon"}');
   });
 
+  it('keeps the record strictly below rs = 4096 (RFC 8188)', async () => {
+    const keys = { p256dh: RFC8291.uaPublic, auth: RFC8291.authSecret };
+    // 4078 + delimiter + 16-byte tag = 4095: fits. 4079 would make a 4096-byte record.
+    const body = await encryptPayload(keys, 'x'.repeat(4078));
+    expect(body.length - 86).toBe(4095);
+    await expect(encryptPayload(keys, 'x'.repeat(4079))).rejects.toThrow(/too large/);
+  });
+
   it('refuses payloads that do not fit one record', async () => {
     await expect(
       encryptPayload({ p256dh: RFC8291.uaPublic, auth: RFC8291.authSecret }, 'x'.repeat(5000)),

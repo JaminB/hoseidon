@@ -151,10 +151,11 @@ export class RateLimiter<B extends string = string> {
         if (!job) break;
         let ok = true;
         let value: unknown;
-        if (this.store && this.inflightMs > 0) {
-          this.store.set(laneKey, this.now() + this.inflightMs);
-        }
         try {
+          // If this mark can't be written the call doesn't go out (it fails like any call).
+          if (this.store && this.inflightMs > 0) {
+            this.store.set(laneKey, this.now() + this.inflightMs);
+          }
           value = await job.run();
         } catch (err) {
           ok = false;
@@ -162,7 +163,11 @@ export class RateLimiter<B extends string = string> {
         }
         // Book-keep before the caller sees the result, so it observes the updated lane.
         lane.lastDoneAt = this.now();
-        this.store?.set(laneKey, lane.lastDoneAt);
+        try {
+          this.store?.set(laneKey, lane.lastDoneAt);
+        } catch {
+          // The in-memory lane still holds; the pre-call mark (if any) stays conservative.
+        }
         lane.pending--;
         if (job.coalesceKey !== undefined) lane.inflight.delete(job.coalesceKey);
         if (ok) job.resolve(value);

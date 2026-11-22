@@ -83,11 +83,13 @@ pnpm exec wrangler deploy
 ```
 
 It starts with `LINKTAP_MOCK=true` (fake taps). Open the `*.workers.dev` URL, sign in, look
-around. To drive real taps: stop any other Hoseidon using the same LinkTap account, `wrangler
-secret put LINKTAP_USERNAME` and `LINKTAP_API_KEY`, then set `LINKTAP_MOCK` to `"false"` **and**
-`ENGINE_ENABLED` to `"true"` in `wrangler.jsonc` and deploy again. With real taps the poller and
-scheduler stay off until `ENGINE_ENABLED` is `true`, and the Worker refuses to run with weak
-secrets.
+around.
+
+> **Keep `LINKTAP_MOCK=true` on Workers for now.** Real taps wait for phase D of
+> [docs/cloudflare.md](docs/cloudflare.md) (budget meter, snapshot retention, a network overview
+> under the 10 ms CPU budget) and the cutover in phase F. Until then, real watering runs on the
+> Node/Docker target. As a safety net, with real taps the Worker keeps the poller and scheduler
+> off unless `ENGINE_ENABLED` is `"true"`, and refuses to run with weak secrets.
 
 Free-plan notes:
 

@@ -46,6 +46,40 @@ export const MAX_ALARM_GAP_MS = 10 * 60_000;
 /** An alarm this overdue is treated as dead by ensureAlarm. */
 export const OVERDUE_MS = 2 * 60_000;
 
+/** Biggest body the API takes (schedules and WebAuthn payloads are a few KB). */
+export const MAX_API_BODY = 256 * 1024;
+/** LinkTap webhooks are tiny JSON objects. */
+export const MAX_HOOK_BODY = 16 * 1024;
+
+/**
+ * Buffer the body, counting bytes as they arrive, and give up past `max`. Content-Length can be
+ * missing (chunked) or wrong, so it is never trusted on its own: a big body can't make the object
+ * buffer more than `max` (Workers have 128 MB).
+ */
+export async function limitBody(request: Request, max: number): Promise<Request | Response> {
+  if (!request.body) return request;
+  const reader = request.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > max) {
+      await reader.cancel().catch(() => {});
+      return Response.json({ error: 'payload too large' }, { status: 413 });
+    }
+    chunks.push(value);
+  }
+  const body = new Uint8Array(total);
+  let at = 0;
+  for (const c of chunks) {
+    body.set(c, at);
+    at += c.byteLength;
+  }
+  return new Request(request.url, { method: request.method, headers: request.headers, body });
+}
+
 export function stringEnv(env: Record<string, unknown>): Record<string, string> {
   const out: Record<string, string> = {};
   for (const [k, v] of Object.entries(env)) if (typeof v === 'string' && v !== '') out[k] = v;
@@ -175,9 +209,15 @@ export class BrainCore {
     this.app = this.makeApp(this.timeZone());
   }
 
-  async fetch(request: Request): Promise<Response> {
-    this.adoptOrigin(request);
-    const path = new URL(request.url).pathname;
+  async fetch(incoming: Request): Promise<Response> {
+    this.adoptOrigin(incoming);
+    const path = new URL(incoming.url).pathname;
+    const limited = await limitBody(
+      incoming,
+      path.startsWith('/hooks/') ? MAX_HOOK_BODY : MAX_API_BODY,
+    );
+    if (limited instanceof Response) return limited;
+    const request = limited;
     let response: Response;
     if (this.problems.length && path !== '/api/health') {
       response = Response.json(

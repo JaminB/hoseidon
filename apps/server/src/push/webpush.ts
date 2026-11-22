@@ -183,8 +183,9 @@ export async function encryptPayload(
   const nonce = await hkdf(salt, ikm, enc.encode('Content-Encoding: nonce\0'), 12);
 
   const body = typeof plaintext === 'string' ? enc.encode(plaintext) : plaintext;
-  // One record: the payload plus the 0x02 "last record" delimiter, no padding.
-  if (body.length + 1 + 16 > RECORD_SIZE) throw new Error('push payload too large');
+  // One record: the payload plus the 0x02 "last record" delimiter and the 16-byte tag, no
+  // padding. RFC 8188 needs rs to be greater than the record, so the record stays below 4096.
+  if (body.length + 1 + 16 >= RECORD_SIZE) throw new Error('push payload too large');
   const key = await subtle().importKey('raw', cek, 'AES-GCM', false, ['encrypt']);
   const ct = new Uint8Array(
     await subtle().encrypt({ name: 'AES-GCM', iv: nonce }, key, concat(body, Uint8Array.of(2))),

@@ -1,4 +1,7 @@
 import { CSRF_HEADER } from '@hoseidon/shared';
+import { MAX_API_BODY, MAX_HOOK_BODY } from '@hoseidon/server/runtime/brain';
+
+export { MAX_API_BODY, MAX_HOOK_BODY };
 
 /**
  * Cheap checks in the stateless Worker, so obvious junk never costs a Durable Object request
@@ -7,10 +10,9 @@ import { CSRF_HEADER } from '@hoseidon/shared';
  */
 
 const SAFE = new Set(['GET', 'HEAD', 'OPTIONS']);
-/** Biggest body the API takes (schedules, WebAuthn payloads are a few KB). */
-export const MAX_API_BODY = 256 * 1024;
-/** LinkTap webhooks are tiny JSON objects. */
-export const MAX_HOOK_BODY = 16 * 1024;
+// A declared Content-Length over the cap is refused here for free; the Brain also counts the
+// bytes it actually reads (runtime/brain.ts limitBody), so a missing or lying header can't
+// get a bigger body through.
 
 const json = (status: number, error: string) => Response.json({ error }, { status });
 

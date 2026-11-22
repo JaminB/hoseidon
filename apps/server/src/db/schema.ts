@@ -357,11 +357,15 @@ export const timers = sqliteTable('timers', {
  * Short-lived state that used to live in memory: passkey challenges, Google OAuth `state`, login
  * failure counts. Kept in the DB so it survives restarts (and Durable Object evictions).
  */
-export const ephemeral = sqliteTable('ephemeral', {
-  /** "<kind>:<id>", e.g. "challenge:<id>", "oauth:<state>", "loginfail:<client>". */
-  key: text('key').primaryKey(),
-  value: text('value').notNull(),
-  expiresAt: ts('expires_at').notNull(),
-});
+export const ephemeral = sqliteTable(
+  'ephemeral',
+  {
+    /** "<kind>:<id>", e.g. "challenge:<id>", "oauth:<state>", "loginfail:<client>". */
+    key: text('key').primaryKey(),
+    value: text('value').notNull(),
+    expiresAt: ts('expires_at').notNull(),
+  },
+  (t) => [index('ephemeral_expires_idx').on(t.expiresAt)],
+);
 
 export type TimerRow = typeof timers.$inferSelect;
