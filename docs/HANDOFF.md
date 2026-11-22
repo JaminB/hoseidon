@@ -421,6 +421,7 @@
 ## Phase 9: review fixes
 
 Fixed (all with regression tests):
+
 - Scheduler: `pickNext` skips runs of disabled schedules ("Schedule turned off"); `rematerialize` also skips weather-checked planned rows when a schedule is disabled, or moved (`cancelStarted`, rrule/dtstart/timezone edits) so the rest of an occurrence can't water on top of a new plan.
 - Stop vs. verify: `SchedulerEngine.noteStop(deviceId)` (called by `POST /devices/:id/stop`) aborts a launch still in `startVerified` (`StartAbortedError`, planned run becomes `cancelled` "Stopped by you", no retry start, no run row).
 - `recordStart` adopts an open non-Hoseidon run (webhook/poll) started within 60 s instead of closing it, so there is one run, not a phantom plus a real one.
