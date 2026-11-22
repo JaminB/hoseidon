@@ -1,6 +1,5 @@
 import { and, asc, desc, eq, gte, lt, lte, type SQL } from 'drizzle-orm';
-import { Hono, type Context } from 'hono';
-import type { z } from 'zod';
+import { Hono } from 'hono';
 import {
   devicePatchSchema,
   dismissAlarmRequestSchema,
@@ -14,10 +13,11 @@ import {
 } from '@hoseidon/shared';
 import type { Db } from '../db';
 import { devices, deviceSnapshots, events, gateways, runs } from '../db/schema';
-import { LinkTapError, type LinkTapClient } from '../linktap/client';
+import type { LinkTapClient } from '../linktap/client';
 import type { Poller } from '../poller';
-import { ALARM_LABELS, closeRun, insertEvents, openRun, startRun } from '../poller/ingest';
+import { ALARM_LABELS, closeRun, insertEvents, openRun, recordStart } from '../poller/ingest';
 import { toDevice, toEvent, toGateway, toRun, toSnapshot } from './dto';
+import { body, HttpError, onApiError, parseDate } from './http';
 
 export interface ApiDeps {
   db: Db;
@@ -26,44 +26,9 @@ export interface ApiDeps {
   mock: boolean;
 }
 
-class HttpError extends Error {
-  constructor(
-    readonly status: 400 | 404 | 409 | 502,
-    message: string,
-    readonly detail?: unknown,
-  ) {
-    super(message);
-  }
-}
-
-async function body<S extends z.ZodType>(c: Context, schema: S): Promise<z.infer<S>> {
-  const json: unknown = await c.req.json().catch(() => {
-    throw new HttpError(400, 'invalid JSON body');
-  });
-  const parsed = schema.safeParse(json);
-  if (!parsed.success) throw new HttpError(400, 'invalid body', parsed.error.issues);
-  return parsed.data;
-}
-
-function parseDate(value: string | undefined, fallback: Date): Date {
-  if (!value) return fallback;
-  const d = new Date(value);
-  if (Number.isNaN(d.getTime())) throw new HttpError(400, `invalid date: ${value}`);
-  return d;
-}
-
 export function apiRoutes({ db, linktap, poller, mock }: ApiDeps) {
   const api = new Hono();
-
-  api.onError((err, c) => {
-    if (err instanceof HttpError) {
-      return c.json({ error: err.message, detail: err.detail }, err.status);
-    }
-    if (err instanceof LinkTapError) {
-      return c.json({ error: err.message }, err.kind === 'invalid' ? 400 : 502);
-    }
-    throw err;
-  });
+  api.onError(onApiError);
 
   const findDevice = (id: string) => {
     const row = db.select().from(devices).where(eq(devices.id, id)).get();
@@ -161,28 +126,9 @@ export function apiRoutes({ db, linktap, poller, mock }: ApiDeps) {
       taplinkerId: device.id,
       seconds,
     });
-    const now = new Date();
-    const run = db.transaction((tx) => {
-      const open = openRun(tx, device.id);
-      if (open) closeRun(tx, open, now, 'stopped');
-      tx.update(devices)
-        .set({
-          watering: {
-            remainingSec: seconds,
-            totalSec: seconds,
-            flowMlPerMin: null,
-            volumeMl: null,
-          },
-        })
-        .where(eq(devices.id, device.id))
-        .run();
-      return startRun(tx, {
-        deviceId: device.id,
-        startedAt: now,
-        plannedSec: seconds,
-        source: 'hoseidon',
-      });
-    });
+    const run = db.transaction((tx) =>
+      recordStart(tx, { deviceId: device.id, seconds, now: new Date() }),
+    );
     return c.json(result(toRun(run)));
   });
 

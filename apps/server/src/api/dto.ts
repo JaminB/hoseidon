@@ -1,5 +1,22 @@
-import type { Device, Gateway, HoseidonEvent, Run, Snapshot } from '@hoseidon/shared';
-import type { DeviceRow, EventRow, GatewayRow, RunRow, SnapshotRow } from '../db/schema';
+import type {
+  Device,
+  Gateway,
+  HoseidonEvent,
+  PlannedRun,
+  Run,
+  Schedule,
+  ScheduleWarning,
+  Snapshot,
+} from '@hoseidon/shared';
+import type {
+  DeviceRow,
+  EventRow,
+  GatewayRow,
+  PlannedRunRow,
+  RunRow,
+  ScheduleRow,
+  SnapshotRow,
+} from '../db/schema';
 
 const iso = (d: Date | null) => (d ? d.toISOString() : null);
 
@@ -77,5 +94,51 @@ export function toEvent(row: EventRow): HoseidonEvent {
     deviceId: row.deviceId,
     title: row.title,
     message: row.message,
+  };
+}
+
+export function toSchedule(
+  row: ScheduleRow,
+  extra: { nextAt: Date | null; warnings: ScheduleWarning[] },
+): Schedule {
+  return {
+    id: row.id,
+    name: row.name,
+    color: row.color,
+    rrule: row.rrule,
+    dtstart: row.dtstart,
+    timezone: row.timezone,
+    enabled: row.enabled,
+    items: row.items,
+    cycleSoak: row.cycleSoak ?? null,
+    sequential: row.sequential,
+    skipRules: row.skipRules,
+    gcalEventId: row.gcalEventId,
+    nextAt: iso(extra.nextAt),
+    warnings: extra.warnings,
+    createdAt: row.createdAt.toISOString(),
+    updatedAt: row.updatedAt.toISOString(),
+  };
+}
+
+export function toPlannedRun(row: PlannedRunRow): PlannedRun {
+  return {
+    id: row.id,
+    scheduleId: row.scheduleId,
+    deviceId: row.deviceId,
+    gatewayId: row.gatewayId,
+    occurrenceAt: row.occurrenceAt.toISOString(),
+    seq: row.seq,
+    cycle: row.cycle,
+    plannedAt: row.plannedAt.toISOString(),
+    seconds: row.seconds,
+    baseSeconds: row.baseSeconds,
+    scale: row.scale,
+    status: row.status,
+    skipReason: row.skipReason,
+    error: row.error,
+    runId: row.runId,
+    startedAt: iso(row.startedAt),
+    endedAt: iso(row.endedAt),
   };
 }

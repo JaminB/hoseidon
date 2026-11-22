@@ -10,6 +10,9 @@ import type { LinkTapClient } from './linktap/client';
 import type { Poller } from './poller';
 import { apiRoutes } from './api/routes';
 import { hookRoutes } from './api/hooks';
+import { scheduleRoutes } from './api/schedules';
+import type { SchedulerEngine } from './schedule/engine';
+import type { Executor } from './schedule/executor';
 
 const VERSION = '0.1.0';
 
@@ -21,9 +24,21 @@ export interface AppDeps {
   db: Db;
   linktap: LinkTapClient;
   poller?: Poller;
+  scheduler?: SchedulerEngine;
+  executor?: Executor;
+  /** Default schedule time zone when a gateway has none. Default: the server's. */
+  timeZone?: string;
 }
 
-export function createApp({ config, db, linktap, poller }: AppDeps) {
+export function createApp({
+  config,
+  db,
+  linktap,
+  poller,
+  scheduler,
+  executor,
+  timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone,
+}: AppDeps) {
   const app = new Hono();
   if (process.env.NODE_ENV !== 'test') {
     // The webhook secret lives in the path; keep it out of the logs.
@@ -41,6 +56,7 @@ export function createApp({ config, db, linktap, poller }: AppDeps) {
     return c.json(body);
   });
   api.route('/', apiRoutes({ db, linktap, poller, mock: config.LINKTAP_MOCK }));
+  api.route('/', scheduleRoutes({ db, scheduler, executor, timeZone }));
   api.all('*', (c) => c.json({ error: 'not found' }, 404));
   app.route('/api', api);
 
