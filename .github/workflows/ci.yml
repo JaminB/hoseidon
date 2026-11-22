@@ -3,11 +3,22 @@ name: CI
 on:
   push:
     branches: [main]
+    # A docs-only merge doesn't redeploy (every deploy restarts the Durable Object).
+    paths-ignore: ['docs/**', '**/*.md']
   pull_request:
+  # Manual run on main: redeploys, and can re-push the Worker secrets (e.g. after rotating one).
+  workflow_dispatch:
+    inputs:
+      push_secrets:
+        description: 'Push every configured GitHub secret to the Worker (rotation)'
+        type: boolean
+        default: false
 
+# Superseded PR runs are cancelled; runs on main queue instead, so a second merge never kills a
+# deploy that is half way between "wrangler deploy" and "wrangler secret bulk".
 concurrency:
   group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   check:
@@ -68,7 +79,7 @@ jobs:
   # Deploys to Cloudflare Workers (Free plan) on every push to main once the checks pass.
   # Skips cleanly (green) until the CLOUDFLARE_API_TOKEN secret exists. See docs/deploy.md.
   deploy:
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main'
     needs: [check, docker, e2e]
     runs-on: ubuntu-latest
     environment: production
@@ -77,13 +88,14 @@ jobs:
       group: deploy-production
       cancel-in-progress: false
     env:
-      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      # Only a boolean here. The token itself goes to the deploy and secret steps alone, so
+      # install scripts and the build never see it.
+      HAS_CLOUDFLARE: ${{ secrets.CLOUDFLARE_API_TOKEN != '' && secrets.CLOUDFLARE_ACCOUNT_ID != '' }}
     steps:
       - name: Check Cloudflare credentials
         id: gate
         run: |
-          if [ -z "$CLOUDFLARE_API_TOKEN" ] || [ -z "$CLOUDFLARE_ACCOUNT_ID" ]; then
+          if [ "$HAS_CLOUDFLARE" != "true" ]; then
             echo "go=false" >> "$GITHUB_OUTPUT"
             echo "::notice title=Deploy skipped::CLOUDFLARE_API_TOKEN / CLOUDFLARE_ACCOUNT_ID are not set (see docs/deploy.md)."
           else
@@ -108,6 +120,8 @@ jobs:
         id: deploy
         if: steps.gate.outputs.go == 'true'
         env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           # Optional repository/environment variables; unset ones keep wrangler.jsonc's value.
           V_LINKTAP_MOCK: ${{ vars.LINKTAP_MOCK }}
           V_ENGINE_ENABLED: ${{ vars.ENGINE_ENABLED }}
@@ -124,10 +138,16 @@ jobs:
           url=$(grep -oE 'https://[A-Za-z0-9.-]+\.workers\.dev' "$RUNNER_TEMP/deploy.log" | head -n1 || true)
           echo "url=$url" >> "$GITHUB_OUTPUT"
       # After the deploy so the Worker exists. Only non-empty secrets are sent, so an unset
-      # GitHub secret never overwrites (or blanks) one already stored in Cloudflare.
+      # GitHub secret never overwrites (or blanks) one already stored in Cloudflare. Each push
+      # makes a new Worker version (and restarts the Durable Object), so on an ordinary merge
+      # only secrets Cloudflare doesn't have yet are sent; a manual run with push_secrets sends
+      # them all (rotation).
       - name: Push Worker secrets
         if: steps.gate.outputs.go == 'true'
         env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          PUSH_ALL: ${{ github.event_name == 'workflow_dispatch' && inputs.push_secrets }}
           LINKTAP_USERNAME: ${{ secrets.LINKTAP_USERNAME }}
           LINKTAP_API_KEY: ${{ secrets.LINKTAP_API_KEY }}
           SESSION_SECRET: ${{ secrets.SESSION_SECRET }}
@@ -136,12 +156,14 @@ jobs:
           GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
           GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
         run: |
-          json=$(jq -n '[
+          existing=$(pnpm --filter @hoseidon/worker exec wrangler secret list --format json | sed -n '/^\[/,$p' | jq -c '[.[].name]')
+          json=$(jq -n --argjson existing "$existing" --arg all "$PUSH_ALL" '[
             "LINKTAP_USERNAME","LINKTAP_API_KEY","SESSION_SECRET","ADMIN_PASSWORD",
             "WEBHOOK_SECRET","GOOGLE_CLIENT_ID","GOOGLE_CLIENT_SECRET"
-          ] | map({key: ., value: (env[.] // "")}) | map(select(.value != "")) | from_entries')
+          ] | map(select($all == "true" or (. as $n | $existing | contains([$n]) | not)))
+            | map({key: ., value: (env[.] // "")}) | map(select(.value != "")) | from_entries')
           if [ "$json" = "{}" ]; then
-            echo "No Worker secrets configured in GitHub; leaving the ones in Cloudflare as they are."
+            echo "No new Worker secrets to push; leaving the ones in Cloudflare as they are."
           else
             echo "Pushing: $(echo "$json" | jq -r 'keys | join(", ")')"
             echo "$json" | pnpm --filter @hoseidon/worker exec wrangler secret bulk
@@ -160,5 +182,6 @@ jobs:
             if curl -fsS --max-time 20 "$url"; then echo; echo "healthy"; exit 0; fi
             echo "attempt $i failed; retrying in 6s"; sleep 6
           done
-          echo "::error title=Smoke check failed::$url did not return 200"
+          # curl -f fails on 503, which is what a refusing app (weak or missing secrets) answers.
+          echo "::error title=Smoke check failed::$url did not return 200 (a 503 means missing or weak secrets; see docs/deploy.md)"
           exit 1

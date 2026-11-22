@@ -154,7 +154,10 @@ export async function geocodeLocality(
   const city = locality.split(',')[0]?.trim();
   if (!city) return null;
   const query = new URLSearchParams({ name: city, count: '10', language: 'en', format: 'json' });
-  const res = await fetchFn(`${GEOCODE_URL}?${query}`, { headers: { accept: 'application/json' } });
+  const res = await fetchFn(`${GEOCODE_URL}?${query}`, {
+    headers: { accept: 'application/json' },
+    signal: AbortSignal.timeout(15_000),
+  });
   if (!res.ok) throw new Error(`geocoding HTTP ${res.status}`);
   const body = (await res.json()) as { results?: GeoPlace[] };
   return pickPlace(locality, body.results ?? []);

@@ -61,9 +61,14 @@ cron "*/10 * * * *" ──► Worker.scheduled ──► Brain.ensureAlarm()   (
 
 - **One Worker** serves the built web app as static assets (`not_found_handling:
 "single-page-application"`) and runs only for `/api/*` and `/hooks/*`. Asset requests are free
-  and don't count against the 100 k requests. The Worker does no state work: it rejects obvious
-  junk (mutating `/api` call without `x-hoseidon-csrf` or with a foreign `Origin`) so it never
-  costs a DO request, then forwards to the Brain. `CF-Connecting-IP` is trusted (the
+  and don't count against the 100 k requests. The Worker does no state work: it rejects junk so
+  it never costs a DO request (alarm runs share that cap, so a flood of anonymous requests could
+  otherwise stop the scheduler): a mutating `/api` call without `x-hoseidon-csrf` or with a
+  foreign `Origin`, a `/hooks/*` call with the wrong secret (constant-time compare), an
+  `/api` call outside the public list without a validly signed session cookie (the token is
+  `id.HMAC(SESSION_SECRET, id)`; the Brain still does the authoritative lookup), and, via the
+  Free-plan rate-limiting binding `AUTH_LIMITER` (30 per minute per client, IPv6 grouped by
+  /64), too many calls to the public routes. Then it forwards to the Brain. `CF-Connecting-IP` is trusted (the
   `TRUST_PROXY` rule becomes always-on).
 - **One Durable Object, "Brain"**, owns all state and all logic. A single object matches the
   domain: one household, LinkTap's limits are per account, and the engine already assumes one

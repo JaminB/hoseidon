@@ -9,6 +9,7 @@ import { TIME_ZONE_KEY } from '../api/settings';
 import { AuthService } from '../auth/service';
 import { GcalService } from '../gcal/service';
 import type { LinkTapClient } from '../linktap/client';
+import { noLinkTap } from '../linktap/unavailable';
 import { PushService } from '../push/service';
 import { createServices, type Services } from '../services';
 import { Wheel } from './wheel';
@@ -107,9 +108,14 @@ export class BrainCore {
     this.now = o.now ?? Date.now;
     this.log = o.log ?? ((msg) => console.warn(msg));
     this.config = this.makeConfig();
+    const missingTap =
+      !this.config.LINKTAP_MOCK && (!this.config.LINKTAP_USERNAME || !this.config.LINKTAP_API_KEY);
     this.problems = this.config.LINKTAP_MOCK
       ? []
-      : insecureConfig(this.config, { minAdminPassword: WORKER_MIN_ADMIN_PASSWORD });
+      : [
+          ...(missingTap ? ['LINKTAP_USERNAME and LINKTAP_API_KEY are not set'] : []),
+          ...insecureConfig(this.config, { minAdminPassword: WORKER_MIN_ADMIN_PASSWORD }),
+        ];
     if (this.problems.length) {
       this.log(
         ['Refusing to run with real taps and weak secrets:', ...this.problems].join('\n - '),
@@ -128,7 +134,9 @@ export class BrainCore {
       lastCallStore: settingsLastCallStore(this.db),
       passwordScheme: 'pbkdf2',
       scheduleReconcile: (deviceId, at) => wheel?.schedule(`reconcile:${deviceId}`, at),
-      linktap: o.linktap,
+      // Missing credentials degrade to the 503 below instead of crashing the object.
+      linktap: o.linktap ?? (missingTap ? noLinkTap() : undefined),
+      signTokens: true,
     });
     this.wheel = wheel = new Wheel({
       db: this.db,
@@ -194,7 +202,13 @@ export class BrainCore {
     this.config = this.makeConfig();
     const { db, config, log } = { db: this.db, config: this.config, log: this.log };
     this.services.gcal.stop();
-    this.services.auth = new AuthService({ db, config, log, passwordScheme: 'pbkdf2' });
+    this.services.auth = new AuthService({
+      db,
+      config,
+      log,
+      passwordScheme: 'pbkdf2',
+      signTokens: true,
+    });
     this.services.gcal = new GcalService({
       db,
       config,
@@ -219,9 +233,11 @@ export class BrainCore {
     if (limited instanceof Response) return limited;
     const request = limited;
     let response: Response;
-    if (this.problems.length && path !== '/api/health') {
+    if (this.problems.length) {
+      // /api/health too, so a deploy smoke check fails instead of passing on a dead app.
       response = Response.json(
         {
+          ...(path === '/api/health' ? { ok: false } : {}),
           error: 'Hoseidon refuses to run with real taps and weak secrets',
           problems: this.problems,
         },

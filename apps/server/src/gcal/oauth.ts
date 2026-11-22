@@ -61,6 +61,9 @@ const tokenSchema = z.object({
 });
 export type TokenResponse = z.infer<typeof tokenSchema>;
 
+/** A hung Google call must not stall the Durable Object's single alarm handler. */
+export const GOOGLE_TIMEOUT_MS = 15_000;
+
 async function tokenRequest(
   fetchImpl: typeof fetch,
   params: Record<string, string>,
@@ -69,6 +72,7 @@ async function tokenRequest(
     method: 'POST',
     headers: { 'content-type': 'application/x-www-form-urlencoded' },
     body: new URLSearchParams(params).toString(),
+    signal: AbortSignal.timeout(GOOGLE_TIMEOUT_MS),
   });
   const json = (await res.json().catch(() => null)) as Record<string, unknown> | null;
   if (!res.ok) {
@@ -117,6 +121,7 @@ export async function revokeToken(fetchImpl: typeof fetch, token: string): Promi
     method: 'POST',
     headers: { 'content-type': 'application/x-www-form-urlencoded' },
     body: new URLSearchParams({ token }).toString(),
+    signal: AbortSignal.timeout(GOOGLE_TIMEOUT_MS),
   }).catch(() => undefined);
 }
 

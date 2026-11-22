@@ -618,3 +618,33 @@ Real 1-minute instant runs on a 4-outlet ValveLinker. Details in `docs/linktap-a
 - Added docs/deploy.md and a README link. The workflow was NOT executed (no Cloudflare
   credentials); only YAML/lint were checked locally. First real run happens on the first merge
   after the user adds the secrets.
+
+## Cloudflare fix phase (branch fix/cloudflare-review)
+
+Fixes from the review of phases B and C.
+
+- **Edge filtering (major).** `edgeCheck` (apps/worker/src/edge.ts) is now async and takes the env.
+  `/hooks/linktap/<secret>` is compared in constant time at the edge (404 without waking the
+  Brain). `/api` outside the public list needs a session cookie whose HMAC checks out. Session
+  tokens on Workers are `id.HMAC(SESSION_SECRET, id)` (`auth/token.ts`, `signTokens` option, set
+  by BrainCore only; Node keeps unsigned tokens). Without SESSION_SECRET (mock/dev) the edge lets
+  the Brain decide. Public routes are rate limited per client by the `AUTH_LIMITER` binding
+  (`ratelimits` in wrangler.jsonc, 30/min). Existing sessions are signed out once by this deploy.
+  Residual risk: a flood of public-route requests from many IPs, or of requests holding a stolen
+  signed cookie, still costs DO requests.
+- **KDF on cold start.** AuthService stores `auth.passwordFp` (HMAC of scheme and password under
+  SESSION_SECRET) and skips the PBKDF2 check when it matches. No SESSION_SECRET: the full check
+  runs as before (a bare hash would be a fast password oracle).
+- **Timeouts.** 15 s AbortSignal on the Google Calendar, OAuth token/revoke and geocoding fetches.
+- **Login throttling.** The client key groups IPv6 by /64. The global cap is unchanged; the edge
+  limiter is the extra layer.
+- **Health and missing credentials.** With problems BrainCore answers 503 on `/api/health` too
+  (`ok:false`), so the smoke check (curl -f) fails. Missing LINKTAP_USERNAME/API_KEY with
+  LINKTAP_MOCK=false is now a problem with a stub client (`linktap/unavailable.ts`) instead of a
+  constructor exception.
+- **CI.** Workflow concurrency cancels only PR runs; the Cloudflare token is passed to the deploy
+  and secrets steps only (job level has a boolean); secrets are pushed only when Cloudflare lacks
+  them, or on a manual run with `push_secrets`; docs-only pushes skip CI; `workflow_dispatch`
+  added. The `production` environment is restricted to the `main` branch (repo setting).
+- Tests: edge.test.ts (secret, cookie, limiter), token.test.ts, gcal/timeout.test.ts, brain.test.ts
+  (503 health, missing creds, signed tokens, KDF skip).

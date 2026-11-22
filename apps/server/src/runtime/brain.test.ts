@@ -1,8 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { CSRF_HEADER } from '@hoseidon/shared';
 import { openDb } from '../db';
-import { getSetting, lastCalls } from '../db/kv';
-import { gateways, timers } from '../db/schema';
+import { getSetting, lastCalls, setSetting } from '../db/kv';
+import { hasValidSignature } from '../auth/token';
+import { gateways, sessions, timers } from '../db/schema';
 import type { LinkTapClient } from '../linktap/client';
 import { MOCK_IDS } from '../linktap/mock';
 import { BrainCore, MAX_ALARM_GAP_MS, PUBLIC_URL_KEY, type AlarmPort } from './brain';
@@ -322,9 +323,56 @@ describe('BrainCore requests', () => {
     const brain = make(stub);
     expect(brain.engineOn).toBe(false);
     expect(brain.problems.join()).toMatch(/ADMIN_PASSWORD/);
-    expect((await brain.fetch(new Request(`${ORIGIN}/api/health`))).status).toBe(200);
+    // The deploy smoke check hits /api/health: it must fail too, not pass on a refusing app.
+    const health = await brain.fetch(new Request(`${ORIGIN}/api/health`));
+    expect(health.status).toBe(503);
+    expect(await health.json()).toMatchObject({ ok: false });
     expect((await brain.fetch(new Request(`${ORIGIN}/api/gateways`))).status).toBe(503);
     await brain.alarm();
+  });
+
+  it('degrades to 503 (not a crash) when real taps have no LinkTap credentials yet', async () => {
+    const { make, logs } = setup({
+      LINKTAP_MOCK: 'false',
+      ADMIN_PASSWORD: PASSWORD,
+      SESSION_SECRET: 's'.repeat(40),
+      WEBHOOK_SECRET: 'w'.repeat(32),
+    });
+    const brain = make();
+    expect(brain.problems.join()).toMatch(/LINKTAP_USERNAME/);
+    expect(brain.engineOn).toBe(false);
+    expect((await brain.fetch(new Request(`${ORIGIN}/api/health`))).status).toBe(503);
+    expect((await brain.fetch(new Request(`${ORIGIN}/api/gateways`))).status).toBe(503);
+    await brain.alarm();
+    expect(logs.join(' | ')).not.toMatch(/alarm:/);
+  });
+
+  it('signs session tokens under SESSION_SECRET so the edge can check them', async () => {
+    const { make, db } = setup();
+    const brain = make();
+    const cookie = await login(brain);
+    const token = cookie.split('=')[1]!;
+    expect(hasValidSignature(token, ENV.SESSION_SECRET)).toBe(true);
+    const gw = (c: string) =>
+      brain.fetch(new Request(`${ORIGIN}/api/gateways`, { headers: { cookie: c } }));
+    expect((await gw(cookie)).status).toBe(200);
+    // The same random id without its signature is no session, even if its hash were stored.
+    const id = token.slice(0, token.lastIndexOf('.'));
+    expect((await gw(`hoseidon_session=${id}`)).status).toBe(401);
+    expect(db.select().from(sessions).all()).toHaveLength(1);
+  });
+
+  it('skips the slow password check on a restart when the password is unchanged', async () => {
+    const { make, db } = setup();
+    await make().services.auth.whenReady();
+    const key = 'auth.passwordHash';
+    const hash = getSetting(db, key)!;
+    expect(getSetting(db, 'auth.passwordFp')).toBeTruthy();
+    // A KDF run would notice this is not a valid hash (right scheme, wrong bytes) and replace it.
+    setSetting(db, key, 'pbkdf2$tampered');
+    await make().services.auth.whenReady();
+    expect(getSetting(db, key)).toBe('pbkdf2$tampered');
+    setSetting(db, key, hash);
   });
 
   it('keeps the engine off with real taps unless ENGINE_ENABLED=true', () => {

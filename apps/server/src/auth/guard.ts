@@ -3,10 +3,12 @@ import { getCookie } from 'hono/cookie';
 import { CSRF_HEADER } from '@hoseidon/shared';
 import type { AuthService } from './service';
 
-export const SESSION_COOKIE = 'hoseidon_session';
+import { SESSION_COOKIE } from './token';
+
+export { SESSION_COOKIE };
 
 /** /api paths that work without a session. (/hooks/* is not under /api and has its own secret.) */
-const PUBLIC: { method: string; path: string }[] = [
+export const PUBLIC: { method: string; path: string }[] = [
   { method: 'GET', path: '/health' },
   { method: 'GET', path: '/auth/session' },
   { method: 'POST', path: '/auth/login' },

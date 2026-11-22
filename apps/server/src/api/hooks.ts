@@ -1,6 +1,6 @@
-import { createHash, timingSafeEqual } from 'node:crypto';
 import { Hono } from 'hono';
 import { z } from 'zod';
+import { safeEqual } from '../auth/token';
 import type { Db } from '../db/types';
 import { ingestWebhook } from '../poller/ingest';
 
@@ -14,11 +14,6 @@ const webhookSchema = z.looseObject({
   deviceId: z.string().nullish(),
   workMode: z.string().nullish(),
 });
-
-function safeEqual(a: string, b: string): boolean {
-  const h = (s: string) => createHash('sha256').update(s).digest();
-  return timingSafeEqual(h(a), h(b));
-}
 
 export interface HookDeps {
   db: Db;
