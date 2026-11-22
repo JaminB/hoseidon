@@ -4,10 +4,13 @@ import {
   analyticsSummarySchema,
   commandResultSchema,
   deviceSchema,
+  diagnosisSchema,
   eventSchema,
   gatewaySchema,
   gatewayWithDevicesSchema,
   healthSchema,
+  networkOverviewSchema,
+  networkSettingsSchema,
   plannedRunSchema,
   previewOccurrenceSchema,
   scheduleSchema,
@@ -122,6 +125,16 @@ export const api = {
     request(`/analytics/devices/${id}`, analyticsSchema, { query: { from, to } }),
   analyticsSummary: (from: string, to: string) =>
     request('/analytics/summary', analyticsSummarySchema, { query: { from, to } }),
+  networkOverview: (days: number) =>
+    request('/network/overview', networkOverviewSchema, { query: { days } }),
+  networkSettings: () => request('/network/settings', networkSettingsSchema),
+  patchNetworkSettings: (weakSignalPct: number) =>
+    request('/network/settings', networkSettingsSchema, {
+      method: 'PATCH',
+      body: { weakSignalPct },
+    }),
+  diagnose: (deviceId: string) =>
+    request(`/diagnose/${deviceId}`, diagnosisSchema, { method: 'POST' }),
   skipPlannedRun: (id: number, wholeOccurrence = true) =>
     request(`/planned-runs/${id}/skip`, z.array(plannedRunSchema), {
       method: 'POST',

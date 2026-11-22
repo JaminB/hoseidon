@@ -26,7 +26,7 @@ keeps your lawn alive without a single "Oops, something went wrong" toast.
 - [x] LinkTap client with a rate-limit queue, a poller, a webhook receiver and a REST API
 - [x] A calm, minimal web app (light and dark): Today timeline with live countdowns, device cards
       with battery, signal, alarms and one-tap quick runs, and a drag-to-create week calendar
-- [ ] Network monitoring over time (uptime, signal history, battery drain, a Diagnose panel)
+- [x] Network monitoring over time: gateway uptime timelines, signal history, battery drain and days left, an offline incident log, LinkTap API health and a Diagnose checklist
 - [x] A real scheduler engine: RRULE-based and DST-safe, one zone at a time per gateway,
       cycle-and-soak, skip rules, verified starts, and quick add ("every other day 6am front lawn 15m")
 - [x] Weather-driven skips (rain, freeze, wind) and ET₀ scaling, from Open-Meteo

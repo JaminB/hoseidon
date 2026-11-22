@@ -285,3 +285,39 @@
   Fahrenheit only for en-US locales.
 - Soil moisture is stored and returned by the API but not charted yet.
 - A manual skip with free text that mentions "rain" is classified as rain.
+
+## Phase 5: Network monitoring + troubleshooting
+
+**What exists**
+
+- `server/src/network/`: `metrics.ts` (pure: `buildTimeline`, `signalStats`, `batteryStats`, `downsample`,
+  `freshness`), `overview.ts` (`buildNetwork(db, {now, days, weakSignalPct})` reads `device_snapshots`
+  and `events`; `classifyTransition` reads our events and LinkTap webhook names loosely),
+  `diagnose.ts` (pure 10-item checklist with plain-English fixes), `settings.ts` (weak-signal
+  threshold in the `settings` table, key `network.weakSignalPct`, default 40).
+- Gateway uptime comes from `gateway.*`/webhook events (gateways have no snapshots); timer uptime from
+  `device.*` events. Start state is inferred from the first transition. Stretches with no poll for
+  more than 20 min, and time before the first snapshot, are "unknown" and excluded from uptime.
+  Incident source is `webhook` or `poll`; timer incidents inside a gateway outage get `viaGateway`.
+- Battery drain is a least-squares slope since the last recharge (a rise of 10+ points); it needs 5
+  samples and 12 h. Signal "drops" are falls of 25+ points between consecutive polls.
+- `linktap/stats.ts` + `client.stats()`: per-endpoint calls, errors, last OK/error, recent error rate
+  (last 50) and rate-limit queue wait. In memory only; resets on restart.
+- The poller's `device.signal_low`/`signal_ok` events now use the configurable threshold (was a
+  fixed 30). `THRESHOLDS.signalLowPct` is gone.
+- API (`api/network.ts`): `GET /api/network/overview?days=1..30`, `/network/gateways/:id`,
+  `/network/devices/:id`, `GET|PATCH /api/network/settings`, `POST /api/diagnose/:deviceId`.
+  DTOs in `packages/shared/src/network.ts`.
+- Web: `pages/network.tsx` (summary, per-gateway topology with signal as line weight/colour, uptime
+  bars, signal/battery sparklines, incident log, API health, threshold slider, mesh disclaimer),
+  `components/network/` (`gateway-card`, `charts`, `diagnose-sheet`), `lib/network.ts` (tested
+  geometry/labels). Diagnose buttons are on Network rows and on Devices rows.
+
+**Known gaps**
+
+- API health counters are not persisted. Gateways have no snapshots, so a gateway with no events and
+  no devices shows all "no data".
+- Webhook-reported device events attach to every outlet sharing the 16-char base id.
+- No retention/pruning of `device_snapshots` (~288 rows/device/day); 30-day windows read ~9k rows each.
+- A timer offline for the whole window shows an incident starting at the window edge.
+- LinkTap exposes no extender/mesh data, so the topology is always gateway-to-timer.

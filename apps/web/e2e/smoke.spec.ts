@@ -228,3 +228,38 @@ test.describe('analytics', () => {
     await expect(page.getByText('Weather data by Open-Meteo.com (CC BY 4.0)')).toBeVisible();
   });
 });
+
+test.describe('network', () => {
+  test.use({ viewport: { width: 1440, height: 900 } });
+
+  test('shows uptime, topology and the mesh disclaimer, and diagnoses a timer', async ({
+    page,
+  }) => {
+    await page.goto('/network');
+    await expect(page.getByText('Gateways online')).toBeVisible();
+    await expect(page.getByRole('group', { name: 'Topology' }).first()).toBeVisible();
+    await expect(page.getByText('LinkTap API health')).toBeVisible();
+    await expect(page.getByText(/does not expose range extenders/)).toBeVisible();
+    await page.getByRole('radio', { name: '30d' }).click();
+    await page.waitForLoadState('networkidle');
+
+    await page.getByRole('button', { name: /^Diagnose Side Yard/ }).click();
+    const dialog = page.getByRole('dialog');
+    await expect(dialog.getByText('Gateway is online')).toBeVisible();
+    await expect(dialog.getByText('No LinkTap plan in the way')).toBeVisible();
+    await expect(dialog.getByText('Try:').first()).toBeVisible();
+    await page.waitForTimeout(350);
+    await page.screenshot({ path: 'e2e/__screenshots__/network-diagnose-desktop-light.png' });
+    await page.keyboard.press('Escape');
+    await expect(dialog).toBeHidden();
+  });
+
+  test('Diagnose is reachable from the Devices page', async ({ page }) => {
+    await page.goto('/devices');
+    await page
+      .getByRole('button', { name: /^Diagnose Veggie/ })
+      .first()
+      .click();
+    await expect(page.getByRole('dialog').getByText('No active alarms')).toBeVisible();
+  });
+});

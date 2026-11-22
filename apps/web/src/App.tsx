@@ -14,9 +14,7 @@ const SettingsPage = lazy(() =>
 const AnalyticsPage = lazy(() =>
   import('./pages/analytics').then((m) => ({ default: m.AnalyticsPage })),
 );
-const NetworkPage = lazy(() =>
-  import('./pages/placeholders').then((m) => ({ default: m.NetworkPage })),
-);
+const NetworkPage = lazy(() => import('./pages/network').then((m) => ({ default: m.NetworkPage })));
 
 export function App() {
   return (

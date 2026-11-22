@@ -27,19 +27,17 @@ export interface ApiStats {
   endpoints: EndpointStats[];
 }
 
-interface Entry extends EndpointStats {
-  window: boolean[];
-}
-
 export class CallStats {
-  private readonly entries = new Map<string, Entry>();
+  private readonly entries = new Map<string, EndpointStats>();
+  /** Per endpoint: outcomes of the last RECENT calls (true = failed). */
+  private readonly windows = new Map<string, boolean[]>();
   private readonly since: Date;
 
   constructor(private readonly now: () => number = Date.now) {
     this.since = new Date(now());
   }
 
-  private entry(endpoint: string): Entry {
+  private entry(endpoint: string): EndpointStats {
     let e = this.entries.get(endpoint);
     if (!e) {
       e = {
@@ -54,7 +52,6 @@ export class CallStats {
         totalWaitMs: 0,
         waits: 0,
         maxWaitMs: 0,
-        window: [],
       };
       this.entries.set(endpoint, e);
     }
@@ -66,8 +63,10 @@ export class CallStats {
     const e = this.entry(endpoint);
     const at = new Date(this.now());
     e.calls++;
-    e.window.push(error !== undefined);
-    if (e.window.length > RECENT) e.window.shift();
+    const window = this.windows.get(endpoint) ?? [];
+    this.windows.set(endpoint, window);
+    window.push(error !== undefined);
+    if (window.length > RECENT) window.shift();
     if (error === undefined) {
       e.lastOkAt = at;
     } else {
@@ -75,8 +74,8 @@ export class CallStats {
       e.lastErrorAt = at;
       e.lastError = error;
     }
-    e.recentCalls = e.window.length;
-    e.recentErrors = e.window.filter(Boolean).length;
+    e.recentCalls = window.length;
+    e.recentErrors = window.filter(Boolean).length;
   }
 
   /** How long a call sat in the rate-limit queue before it was sent. */
@@ -92,7 +91,7 @@ export class CallStats {
     return {
       since: this.since,
       endpoints: [...this.entries.values()]
-        .map(({ window: _window, ...rest }) => rest)
+        .map((e) => ({ ...e }))
         .sort((a, b) => a.endpoint.localeCompare(b.endpoint)),
     };
   }
