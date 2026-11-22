@@ -1,5 +1,6 @@
 import type { Config } from './config';
 import type { Db } from './db/types';
+import { purgeOnLinkTapModeChange } from './db/data-mode';
 import { linktapFromConfig, type LinkTapClient, type LinkTapMock } from './linktap';
 import { mockGeocodeFetch } from './linktap/location';
 import type { LastCallStore } from './linktap/rate-limit';
@@ -52,6 +53,8 @@ export interface Services {
 export function createServices(o: ServiceOptions): Services {
   const { config, db, timeZone, log } = o;
   const external = o.timers === 'external';
+  // Never show mock devices next to a real account (or the reverse) after LINKTAP_MOCK flips.
+  if (!o.linktap) purgeOnLinkTapModeChange(db, config.LINKTAP_MOCK, log);
   const built = o.linktap ? { client: o.linktap } : linktapFromConfig(config, o.lastCallStore);
   const linktap = built.client;
   const poller = new Poller({
