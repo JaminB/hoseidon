@@ -369,7 +369,12 @@ export class AuthService {
       rpName: 'Hoseidon',
       rpID: this.rp.id,
       userName: email ?? 'admin',
-      userID: new Uint8Array(new TextEncoder().encode(email ?? LEGACY_USER)),
+      // Opaque and fixed-size: WebAuthn user handles are at most 64 bytes, an email can exceed that.
+      userID: new Uint8Array(
+        createHash('sha256')
+          .update(email ?? LEGACY_USER)
+          .digest(),
+      ),
       attestationType: 'none',
       excludeCredentials: this.listPasskeys(email).map((p) => ({ id: p.id })),
       authenticatorSelection: { residentKey: 'preferred', userVerification: 'preferred' },
@@ -616,10 +621,8 @@ export class AuthService {
         })
         .where(eq(users.email, e))
         .run();
-      if (patch.disabled) {
-        revokeAccess(tx, e);
-        tx.update(users).set({ googleSub: null }).where(eq(users.email, e)).run();
-      }
+      // googleSub is kept: re-enabling must not let a different Google account in.
+      if (patch.disabled) revokeAccess(tx, e);
     });
     return this.user(e)!;
   }

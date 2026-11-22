@@ -41,7 +41,7 @@ export function AccessCard() {
   });
   const remove = useMutation({
     mutationFn: (u: User) => api.removeUser(u.email),
-    onSuccess: (list) => qc.setQueryData(USERS_KEY, list),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: USERS_KEY }),
     onError: (e) => toast.error('Could not remove', msg(e)),
   });
 
