@@ -1,4 +1,5 @@
 import type { AnalyticsDay, SkipReasonKind, WeatherDay } from '@hoseidon/shared';
+import { mlToVolume, mmToDepth, type UnitSystem } from './units';
 
 export const RANGES = [
   { value: '7d', label: '7d', days: 7 },
@@ -28,26 +29,7 @@ export function rangeDates(range: RangeKey, now = new Date()): { from: string; t
 
 export const mlToL = (ml: number) => ml / 1000;
 
-/** "12.4 L" / "1,250 L" / "3.2 kL": volumes at a glance. */
-export function formatLiters(ml: number): string {
-  const l = mlToL(ml);
-  if (l >= 10_000) return `${(l / 1000).toFixed(1)} kL`;
-  if (l >= 100) return `${Math.round(l).toLocaleString()} L`;
-  if (l >= 10) return `${l.toFixed(0)} L`;
-  return `${l.toFixed(1)} L`;
-}
-
-export const formatMm = (mm: number | null) =>
-  mm === null ? '—' : `${Math.round(mm * 10) / 10} mm`;
-
-const fahrenheit = () =>
-  typeof navigator !== 'undefined' && /^en-(US|LR|MM)\b/.test(navigator.language);
-
-/** Temperature in the viewer's usual unit: Fahrenheit for en-US, Celsius elsewhere. */
-export function formatTemp(c: number | null, f = fahrenheit()): string {
-  if (c === null) return '—';
-  return f ? `${Math.round((c * 9) / 5 + 32)}°` : `${Math.round(c)}°`;
-}
+export { formatDepth, formatFlow, formatTemp, formatVolume } from './units';
 
 export const SKIP_LABEL: Record<SkipReasonKind, string> = {
   rain: 'Rain forecast',
@@ -155,4 +137,23 @@ export function buildHeatmap(days: { date: string; value: number }[]): {
   const weeks: (HeatCell | null)[][] = [];
   for (let i = 0; i < cells.length; i += 7) weeks.push(cells.slice(i, i + 7));
   return { weeks, max };
+}
+
+/**
+ * Rows are built in metric (liters, mm). For display, convert volumes, depths and flow to the
+ * viewer's unit system; the field names stay the same (liters means "volume" here).
+ */
+export function toDisplayUnits(rows: ChartRow[], units: UnitSystem): ChartRow[] {
+  if (units === 'metric') return rows;
+  const vol = (l: number) => Math.round(mlToVolume(l * 1000, units) * 10) / 10;
+  const depth = (mm: number | null) =>
+    mm === null ? null : Math.round(mmToDepth(mm, units) * 100) / 100;
+  return rows.map((r) => ({
+    ...r,
+    liters: vol(r.liters),
+    rainMm: depth(r.rainMm),
+    et0Mm: depth(r.et0Mm),
+    flowLMin:
+      r.flowLMin === null ? null : Math.round(mlToVolume(r.flowLMin * 1000, units) * 100) / 100,
+  }));
 }

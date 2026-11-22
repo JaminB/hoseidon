@@ -1,5 +1,15 @@
 import { z } from 'zod';
 import {
+  appSettingsSchema,
+  authSessionSchema,
+  CSRF_HEADER,
+  linktapTestSchema,
+  passkeySchema,
+  pushStatusSchema,
+  webhookInfoSchema,
+  type AppSettings,
+  type PushPrefs,
+  type PushSubscriptionInput,
   analyticsSchema,
   analyticsSummarySchema,
   commandResultSchema,
@@ -22,6 +32,9 @@ import {
   type SchedulePatch,
 } from '@hoseidon/shared';
 
+/** Fired when any call comes back 401, so the app can drop to the login page. */
+export const SIGNED_OUT_EVENT = 'hoseidon:signed-out';
+
 /** A non-2xx answer from the Hoseidon API, carrying the server's `error` message. */
 export class ApiError extends Error {
   constructor(
@@ -34,6 +47,8 @@ export class ApiError extends Error {
 
 interface RequestOptions {
   method?: 'GET' | 'POST' | 'PATCH' | 'DELETE';
+  /** Skip the "signed out" broadcast on 401 (the login form handles its own). */
+  quiet401?: boolean;
   body?: unknown;
   query?: Record<string, string | number | undefined>;
 }
@@ -41,16 +56,21 @@ interface RequestOptions {
 async function request<S extends z.ZodType>(
   path: string,
   schema: S,
-  { method = 'GET', body, query }: RequestOptions = {},
+  { method = 'GET', body, query, quiet401 }: RequestOptions = {},
 ): Promise<z.infer<S>> {
   const params = new URLSearchParams();
   for (const [k, v] of Object.entries(query ?? {})) if (v !== undefined) params.set(k, String(v));
   const qs = params.size ? `?${params}` : '';
   const res = await fetch(`/api${path}${qs}`, {
     method,
-    headers: body === undefined ? undefined : { 'content-type': 'application/json' },
+    headers: {
+      ...(body === undefined ? {} : { 'content-type': 'application/json' }),
+      // Proves the request came from our own page (see the API guard on the server).
+      [CSRF_HEADER]: '1',
+    },
     body: body === undefined ? undefined : JSON.stringify(body),
   });
+  if (res.status === 401 && !quiet401) window.dispatchEvent(new Event(SIGNED_OUT_EVENT));
   if (!res.ok) {
     const data = (await res.json().catch(() => null)) as { error?: string } | null;
     throw new ApiError(res.status, data?.error ?? `${res.status} ${res.statusText}`);
@@ -77,9 +97,63 @@ const linktapStatusSchema = z.object({
     })
     .nullable(),
 });
+/** WebAuthn options come back as a loose object; @simplewebauthn/browser validates them. */
+const challengeSchema = z.object({
+  options: z.record(z.string(), z.unknown()),
+  challengeId: z.string(),
+});
+
 export type LinkTapStatus = z.infer<typeof linktapStatusSchema>;
 
 export const api = {
+  session: () => request('/auth/session', authSessionSchema, { quiet401: true }),
+  login: (password: string) =>
+    request('/auth/login', authSessionSchema, {
+      method: 'POST',
+      body: { password },
+      quiet401: true,
+    }),
+  logout: () => request('/auth/logout', authSessionSchema, { method: 'POST' }),
+  passkeys: () => request('/auth/passkeys', z.array(passkeySchema)),
+  deletePasskey: (id: string) =>
+    request(`/auth/passkeys/${encodeURIComponent(id)}`, z.array(passkeySchema), {
+      method: 'DELETE',
+    }),
+  passkeyRegisterOptions: () =>
+    request('/auth/passkey/register/options', challengeSchema, { method: 'POST' }),
+  passkeyRegisterVerify: (challengeId: string, response: unknown, name: string) =>
+    request('/auth/passkey/register/verify', z.array(passkeySchema), {
+      method: 'POST',
+      body: { challengeId, response, name },
+    }),
+  passkeyLoginOptions: () =>
+    request('/auth/passkey/login/options', challengeSchema, { method: 'POST', quiet401: true }),
+  passkeyLoginVerify: (challengeId: string, response: unknown) =>
+    request('/auth/passkey/login/verify', authSessionSchema, {
+      method: 'POST',
+      body: { challengeId, response },
+      quiet401: true,
+    }),
+
+  appSettings: () => request('/settings', appSettingsSchema),
+  patchAppSettings: (patch: Partial<Pick<AppSettings, 'timeZone'>>) =>
+    request('/settings', appSettingsSchema, { method: 'PATCH', body: patch }),
+  push: () => request('/push', pushStatusSchema),
+  pushSubscribe: (sub: PushSubscriptionInput) =>
+    request('/push/subscribe', pushStatusSchema, { method: 'POST', body: sub }),
+  pushUnsubscribe: (endpoint: string) =>
+    request('/push/unsubscribe', pushStatusSchema, { method: 'POST', body: { endpoint } }),
+  pushPrefs: (prefs: Partial<PushPrefs>) =>
+    request('/push/prefs', pushStatusSchema, { method: 'PATCH', body: prefs }),
+  pushTest: () =>
+    request('/push/test', z.object({ sent: z.number(), failed: z.number() }), { method: 'POST' }),
+  linktapTest: () => request('/linktap/test', linktapTestSchema, { method: 'POST' }),
+  webhook: () => request('/linktap/webhook', webhookInfoSchema),
+  registerWebhook: () =>
+    request('/linktap/webhook/register', webhookInfoSchema, {
+      method: 'POST',
+      body: { confirm: true },
+    }),
   health: () => request('/health', healthSchema),
   gateways: () => request('/gateways', z.array(gatewayWithDevicesSchema)),
   patchGateway: (

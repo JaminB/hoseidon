@@ -4,6 +4,7 @@ import { useMemo, useState } from 'react';
 import { Page, PageHeader } from '../components/layout/app-shell';
 import { DiagnoseSheet, type DiagnoseTarget } from '../components/network/diagnose-sheet';
 import { GatewayCard } from '../components/network/gateway-card';
+import { ThresholdCard } from '../components/network/threshold-card';
 import { Badge, Dot } from '../components/ui/badge';
 import { Card, CardHeader } from '../components/ui/card';
 import { EmptyState, ErrorBanner, Skeleton, Stat } from '../components/ui/misc';
@@ -11,7 +12,7 @@ import { Segmented } from '../components/ui/tabs';
 import { cn } from '../lib/cn';
 import { formatDuration, formatRelative } from '../lib/format';
 import { formatOutage, formatUptime, incidentSummary, NETWORK_WINDOWS } from '../lib/network';
-import { useNetwork, useSetWeakSignal } from '../lib/queries';
+import { useNetwork } from '../lib/queries';
 
 const when = new Intl.DateTimeFormat(undefined, {
   month: 'short',
@@ -260,42 +261,6 @@ function ApiHealthCard({ health }: { health: ApiHealth }) {
 }
 
 /** The weak-signal threshold. Saved when you let go of the slider. */
-function ThresholdCard({ pct }: { pct: number }) {
-  // While dragging we show the draft; once saved the server value takes over again.
-  const [draft, setDraft] = useState<number | null>(null);
-  const value = draft ?? pct;
-  const save = useSetWeakSignal();
-  const commit = () => {
-    if (draft !== null && draft !== pct) save.mutate(draft, { onSettled: () => setDraft(null) });
-    else setDraft(null);
-  };
-
-  return (
-    <Card>
-      <CardHeader
-        title="Weak-signal threshold"
-        description="Timers below this are flagged, and you get an event when one drops under it."
-      />
-      <div className="flex items-center gap-4 px-5 pb-5">
-        <input
-          type="range"
-          min={10}
-          max={90}
-          step={5}
-          value={value}
-          onChange={(e) => setDraft(Number(e.target.value))}
-          onPointerUp={commit}
-          onKeyUp={commit}
-          onBlur={commit}
-          className="accent-accent h-2 flex-1"
-          aria-label="Weak-signal threshold"
-        />
-        <span className="tnum w-12 text-right text-sm font-semibold">{value}%</span>
-      </div>
-    </Card>
-  );
-}
-
 function NetworkSkeleton() {
   return (
     <div className="space-y-6" aria-busy>

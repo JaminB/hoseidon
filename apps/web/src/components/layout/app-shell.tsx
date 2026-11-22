@@ -18,6 +18,8 @@ import { useTheme, type ThemePref } from '../../lib/theme';
 import { Dot } from '../ui/badge';
 import { LogoMark } from '../logo';
 import { GcalReconnectBanner } from '../gcal-card';
+import { OfflineBanner } from '../offline-banner';
+import { useUnits } from '../../lib/units';
 
 export const NAV: { to: string; label: string; icon: LucideIcon }[] = [
   { to: '/', label: 'Home', icon: House },
@@ -137,10 +139,16 @@ function TabBar() {
 }
 
 export function AppShell() {
+  // Formatters read the unit setting directly, so remount the page when it changes.
+  const [units] = useUnits();
   return (
     <div className="flex min-h-dvh">
       <Sidebar />
-      <main className="min-w-0 flex-1 pb-[calc(76px+env(safe-area-inset-bottom))] md:pb-0">
+      <main
+        key={units}
+        className="min-w-0 flex-1 pb-[calc(76px+env(safe-area-inset-bottom))] md:pb-0"
+      >
+        <OfflineBanner />
         <GcalReconnectBanner />
         <Suspense>
           <Outlet />

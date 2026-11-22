@@ -5,7 +5,16 @@ import globals from 'globals';
 import prettier from 'eslint-config-prettier';
 
 export default tseslint.config(
-  { ignores: ['**/dist/**', '**/node_modules/**', '**/dev-dist/**', 'data/**'] },
+  {
+    ignores: [
+      '**/dist/**',
+      '**/node_modules/**',
+      '**/dev-dist/**',
+      'data/**',
+      'apps/web/public/push-sw.js',
+      'apps/web/scripts/**',
+    ],
+  },
   js.configs.recommended,
   ...tseslint.configs.recommended,
   {

@@ -33,7 +33,8 @@ keeps your lawn alive without a single "Oops, something went wrong" toast.
 - [x] Google Calendar sync: schedules as recurring events in their own calendar, skipped runs
       greyed out with the reason, and (optionally) finished runs logged as past events
 - [x] Per-sprinkler analytics next to weather: water vs rain/ET₀, run duration, flow, heatmap, skips, water saved
-- [ ] Installable PWA with push notifications for alarms and offline devices
+- [x] Installable PWA (offline shell, last-known data) with push notifications for alarms, offline devices and failed or skipped runs
+- [x] Password login (plus optional passkeys), CSRF-protected API
 
 ## Stack
 
@@ -70,13 +71,13 @@ Then open <http://localhost:8787>. Data lives in the `hoseidon-data` volume (SQL
 
 See [`.env.example`](./.env.example). Highlights:
 
-| Variable                                    | What it does                                                                        |
-| ------------------------------------------- | ----------------------------------------------------------------------------------- |
-| `LINKTAP_USERNAME` / `LINKTAP_API_KEY`      | Your LinkTap cloud credentials (link-tap.com, API section)                          |
-| `LINKTAP_MOCK`                              | `true` uses a fake LinkTap server. Set `false` for real hardware                    |
-| `ADMIN_PASSWORD` / `SESSION_SECRET`         | Single-household login. `SESSION_SECRET` also encrypts the Google token (16+ chars) |
-| `PUBLIC_URL` / `WEBHOOK_SECRET`             | Where LinkTap webhooks and Google OAuth call back                                   |
-| `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` | Optional Google Calendar sync                                                       |
+| Variable                                    | What it does                                                                                                                                      |
+| ------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `LINKTAP_USERNAME` / `LINKTAP_API_KEY`      | Your LinkTap cloud credentials (link-tap.com, API section)                                                                                        |
+| `LINKTAP_MOCK`                              | `true` uses a fake LinkTap server. Set `false` for real hardware                                                                                  |
+| `ADMIN_PASSWORD` / `SESSION_SECRET`         | The admin password (hashed with scrypt; changing it signs everyone out) and a long random string. `SESSION_SECRET` also encrypts the Google token |
+| `PUBLIC_URL` / `WEBHOOK_SECRET`             | Where LinkTap webhooks and Google OAuth call back                                                                                                 |
+| `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` | Optional Google Calendar sync                                                                                                                     |
 
 ### Google Calendar sync
 

@@ -16,3 +16,4 @@ dev-dist
 apps/web/e2e/__screenshots__/
 apps/web/e2e/.results/
 apps/web/e2e/.report/
+apps/web/e2e/.auth/
