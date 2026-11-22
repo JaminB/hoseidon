@@ -17,6 +17,7 @@ import {
   type NormalizedGateway,
 } from './normalize';
 import { RateLimiter, type BucketSpec } from './rate-limit';
+import { CallStats, type ApiStats } from './stats';
 
 export const LINKTAP_BASE_URL = 'https://www.link-tap.com/api/';
 
@@ -71,6 +72,8 @@ export interface LinkTapClient {
   pauseWateringPlan(ref: DeviceRef, hours: number): Promise<void>;
   dismissAlarm(ref: DeviceRef, alarm: DismissableAlarm): Promise<void>;
   nextAvailableAt(bucket: Bucket, scope?: string): Date;
+  /** Per-endpoint call health since the client was created. */
+  stats(): ApiStats;
 }
 
 export function httpTransport(baseUrl = LINKTAP_BASE_URL, fetchImpl = fetch): Transport {
@@ -95,25 +98,51 @@ export interface ClientOptions {
 }
 
 export function createLinkTapClient(opts: ClientOptions): LinkTapClient {
-  const limiter = new RateLimiter<Bucket>({ ...LINKTAP_LIMITS, ...opts.limits }, opts.now);
+  const now = opts.now ?? Date.now;
+  const limiter = new RateLimiter<Bucket>({ ...LINKTAP_LIMITS, ...opts.limits }, now);
+  const stats = new CallStats(now);
+
+  /** limiter.schedule, plus how long the call waited in the queue (for the Network page). */
+  const limited = <T>(
+    bucket: Bucket,
+    endpoint: string,
+    fn: () => Promise<T>,
+    o?: { scope?: string; coalesceKey?: string },
+  ) => {
+    const queuedAt = now();
+    return limiter.schedule(
+      bucket,
+      () => {
+        stats.wait(endpoint, now() - queuedAt);
+        return fn();
+      },
+      o,
+    );
+  };
 
   async function call<S extends z.ZodType>(
     endpoint: string,
     params: Record<string, unknown>,
     schema: S,
   ): Promise<z.infer<S>> {
-    const json = await opts.transport(endpoint, {
-      username: opts.username,
-      apiKey: opts.apiKey,
-      ...params,
-    });
-    const err = errorSchema.safeParse(json);
-    if (err.success) throw new LinkTapError(endpoint, err.data.message ?? 'unknown error');
-    const parsed = schema.safeParse(json);
-    if (!parsed.success) {
-      throw new LinkTapError(endpoint, `unexpected response: ${parsed.error.message}`, 'invalid');
+    try {
+      const json = await opts.transport(endpoint, {
+        username: opts.username,
+        apiKey: opts.apiKey,
+        ...params,
+      });
+      const err = errorSchema.safeParse(json);
+      if (err.success) throw new LinkTapError(endpoint, err.data.message ?? 'unknown error');
+      const parsed = schema.safeParse(json);
+      if (!parsed.success) {
+        throw new LinkTapError(endpoint, `unexpected response: ${parsed.error.message}`, 'invalid');
+      }
+      stats.record(endpoint);
+      return parsed.data;
+    } catch (e) {
+      stats.record(endpoint, e instanceof Error ? e.message : String(e));
+      throw e;
     }
-    return parsed.data;
   }
 
   /** IDs as LinkTap wants them: gateway always 16 chars, taplinker keeps its "_N" outlet suffix. */
@@ -123,14 +152,15 @@ export function createLinkTapClient(opts: ClientOptions): LinkTapClient {
   });
 
   const command = (endpoint: string, params: Record<string, unknown>) =>
-    limiter.schedule('command', async () => {
+    limited('command', endpoint, async () => {
       await call(endpoint, params, okSchema);
     });
 
   return {
     getAllDevices: () =>
-      limiter.schedule(
+      limited(
         'devices',
+        'getAllDevices',
         async () => {
           const res = await call('getAllDevices', {}, getAllDevicesSchema);
           return (res.devices ?? []).map(normalizeGateway);
@@ -140,8 +170,9 @@ export function createLinkTapClient(opts: ClientOptions): LinkTapClient {
 
     getWateringStatus: (ref) => {
       const id = ref.taplinkerId.trim();
-      return limiter.schedule(
+      return limited(
         'status',
+        'getWateringStatus',
         async () => {
           const res = await call('getWateringStatus', ids(ref), getWateringStatusSchema);
           return normalizeWatering(res.status);
@@ -151,8 +182,9 @@ export function createLinkTapClient(opts: ClientOptions): LinkTapClient {
     },
 
     getWateringHistory: (ref, timeZone) =>
-      limiter.schedule(
+      limited(
         'history',
+        'getWateringHistory',
         async () => {
           const res = await call('getWateringHistory', ids(ref), getWateringHistorySchema);
           return normalizeHistory(res.history ?? res.data ?? [], timeZone);
@@ -201,5 +233,7 @@ export function createLinkTapClient(opts: ClientOptions): LinkTapClient {
     dismissAlarm: (ref, alarm) => command('dismissAlarm', { ...ids(ref), alarm }),
 
     nextAvailableAt: (bucket, scope) => limiter.nextAvailableAt(bucket, scope),
+
+    stats: () => stats.snapshot(),
   };
 }
