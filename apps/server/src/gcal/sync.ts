@@ -1,5 +1,5 @@
 import { and, eq, gte, inArray, isNull, lte } from 'drizzle-orm';
-import type { Db } from '../db';
+import type { Db } from '../db/types';
 import {
   devices,
   gateways,

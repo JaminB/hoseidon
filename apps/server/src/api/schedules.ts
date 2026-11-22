@@ -9,7 +9,7 @@ import {
   skipPlannedRunSchema,
   type Schedule,
 } from '@hoseidon/shared';
-import type { Db } from '../db';
+import type { Db } from '../db/types';
 import { devices, gateways, plannedRuns, schedules, type ScheduleRow } from '../db/schema';
 import type { SchedulerEngine } from '../schedule/engine';
 import type { Executor } from '../schedule/executor';

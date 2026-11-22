@@ -1,5 +1,4 @@
 import { Hono, type Context } from 'hono';
-import { getConnInfo } from '@hono/node-server/conninfo';
 import { deleteCookie, getCookie, setCookie } from 'hono/cookie';
 import { z } from 'zod';
 import { loginInputSchema, type AuthSession, type Passkey } from '@hoseidon/shared';
@@ -22,10 +21,13 @@ export function authRoutes({
   auth,
   publicUrl,
   trustProxy = false,
+  clientIp,
 }: {
   auth: AuthService;
   publicUrl: string;
   trustProxy?: boolean;
+  /** The connection's own address (Node: the socket). */
+  clientIp?: (c: Context) => string | undefined;
 }) {
   const api = new Hono();
   api.onError(onApiError);
@@ -48,7 +50,7 @@ export function authRoutes({
       if (fromProxy) return fromProxy;
     }
     try {
-      return getConnInfo(c).remote.address ?? 'unknown';
+      return clientIp?.(c) ?? 'unknown';
     } catch {
       return 'unknown'; // no socket (in-process tests)
     }

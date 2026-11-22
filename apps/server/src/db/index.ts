@@ -5,6 +5,7 @@ import Database from 'better-sqlite3';
 import { drizzle } from 'drizzle-orm/better-sqlite3';
 import { migrate } from 'drizzle-orm/better-sqlite3/migrator';
 import * as schema from './schema';
+import type { Db } from './types';
 
 /**
  * Migrations live in apps/server/drizzle. From source (src/db/index.ts) that's ../../drizzle; from
@@ -36,11 +37,12 @@ export function openDb(path: string) {
   const sqlite = new Database(path);
   sqlite.pragma('journal_mode = WAL');
   sqlite.pragma('foreign_keys = ON');
-  const db = drizzle(sqlite, { schema });
+  const node = drizzle(sqlite, { schema });
   dropPhase0Bootstrap(sqlite);
-  migrate(db, { migrationsFolder: migrationsFolder() });
+  migrate(node, { migrationsFolder: migrationsFolder() });
+  const db: Db = node;
   return { sqlite, db };
 }
 
-export type Db = ReturnType<typeof openDb>['db'];
+export type { Db };
 export { schema };

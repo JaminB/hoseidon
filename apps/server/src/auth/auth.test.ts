@@ -142,6 +142,17 @@ describe('login', () => {
     expect(Number(locked.headers.get('retry-after'))).toBeGreaterThan(0);
   });
 
+  it('counts concurrent attempts, so a burst cannot slip past the limit', async () => {
+    const { app } = await secured();
+    const results = await Promise.all(
+      Array.from({ length: 12 }, (_, i) => post(app)('/api/auth/login', { password: `bad${i}` })),
+    );
+    const codes = results.map((r) => r.status).sort();
+    expect(codes.filter((c) => c === 401)).toHaveLength(8);
+    expect(codes.filter((c) => c === 429)).toHaveLength(4);
+    expect((await post(app)('/api/auth/login', { password: PASSWORD })).status).toBe(429);
+  });
+
   it('throttles per client, so strangers cannot lock the owner out', async () => {
     const h = await secured({ TRUST_PROXY: 'true' });
     const from = (ip: string) => ({ 'cf-connecting-ip': ip });

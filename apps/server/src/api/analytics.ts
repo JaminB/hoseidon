@@ -2,7 +2,7 @@ import { eq } from 'drizzle-orm';
 import { Hono, type Context } from 'hono';
 import { WEATHER_ATTRIBUTION, type Analytics, type WeatherResponse } from '@hoseidon/shared';
 import { analyze } from '../analytics/aggregate';
-import type { Db } from '../db';
+import type { Db } from '../db/types';
 import { devices, gateways } from '../db/schema';
 import { addDays, dateInZone, diffDays, isLocalDate, isValidTimeZone } from '../weather/dates';
 import type { OpenMeteoProvider } from '../weather/open-meteo';

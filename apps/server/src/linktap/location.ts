@@ -1,6 +1,6 @@
 import { eq } from 'drizzle-orm';
 import { OpenLocationCode } from 'open-location-code';
-import type { Db } from '../db';
+import type { Db } from '../db/types';
 import { gateways } from '../db/schema';
 
 /**

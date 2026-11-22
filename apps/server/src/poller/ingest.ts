@@ -1,6 +1,6 @@
 import { and, desc, eq, gte, lte, ne } from 'drizzle-orm';
 import type { AlarmFlag, EventSeverity, RunSource, RunStatus, Watering } from '@hoseidon/shared';
-import type { Db } from '../db';
+import type { Db } from '../db/types';
 import {
   devices,
   deviceSnapshots,

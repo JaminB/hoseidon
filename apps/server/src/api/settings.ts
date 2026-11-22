@@ -11,7 +11,7 @@ import {
   type WebhookInfo,
 } from '@hoseidon/shared';
 import type { Config } from '../config';
-import type { Db } from '../db';
+import type { Db } from '../db/types';
 import { getSetting, setSetting } from '../db/kv';
 import { devices, gateways } from '../db/schema';
 import type { LinkTapClient } from '../linktap/client';
@@ -68,21 +68,21 @@ export function settingsRoutes({
 
   // ---- push -----------------------------------------------------------------------------------
 
-  api.get('/push', (c) => c.json(push.status()));
+  api.get('/push', async (c) => c.json(await push.status()));
   api.patch('/push/prefs', async (c) => {
     push.setPrefs(await body(c, pushPrefsSchema.partial()));
-    return c.json(push.status());
+    return c.json(await push.status());
   });
   api.post('/push/subscribe', async (c) => {
     push.subscribe(await body(c, pushSubscriptionInputSchema));
-    return c.json(push.status());
+    return c.json(await push.status());
   });
   api.post('/push/unsubscribe', async (c) => {
     push.unsubscribe((await body(c, z.object({ endpoint: z.string().min(1) }))).endpoint);
-    return c.json(push.status());
+    return c.json(await push.status());
   });
   api.post('/push/test', async (c) => {
-    if (!push.status().subscriptions) throw new HttpError(409, 'no device is subscribed yet');
+    if (!push.subscriptionCount()) throw new HttpError(409, 'no device is subscribed yet');
     return c.json(await push.sendTest());
   });
 

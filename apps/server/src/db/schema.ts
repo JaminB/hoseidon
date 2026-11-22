@@ -341,3 +341,31 @@ export const pushSubscriptions = sqliteTable('push_subscriptions', {
 
 export type PasskeyRow = typeof passkeys.$inferSelect;
 export type PushSubscriptionRow = typeof pushSubscriptions.$inferSelect;
+
+/**
+ * One-off delayed work that must survive a restart (on Cloudflare, a Durable Object eviction): a
+ * history reconcile a few seconds after a run ends, for example. Keyed, so scheduling the same
+ * thing twice keeps one row. The alarm-driven runtime (runtime/wheel.ts) fires them.
+ */
+export const timers = sqliteTable('timers', {
+  key: text('key').primaryKey(),
+  dueAt: ts('due_at').notNull(),
+  payload: text('payload', { mode: 'json' }),
+});
+
+/**
+ * Short-lived state that used to live in memory: passkey challenges, Google OAuth `state`, login
+ * failure counts. Kept in the DB so it survives restarts (and Durable Object evictions).
+ */
+export const ephemeral = sqliteTable(
+  'ephemeral',
+  {
+    /** "<kind>:<id>", e.g. "challenge:<id>", "oauth:<state>", "loginfail:<client>". */
+    key: text('key').primaryKey(),
+    value: text('value').notNull(),
+    expiresAt: ts('expires_at').notNull(),
+  },
+  (t) => [index('ephemeral_expires_idx').on(t.expiresAt)],
+);
+
+export type TimerRow = typeof timers.$inferSelect;

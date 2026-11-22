@@ -43,6 +43,13 @@
       "when": 1795350136981,
       "tag": "0005_live_api_shapes",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "6",
+      "when": 1795367456613,
+      "tag": "0006_durable_state",
+      "breakpoints": true
     }
   ]
 }

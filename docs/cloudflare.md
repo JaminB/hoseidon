@@ -1,6 +1,7 @@
 # Hoseidon on Cloudflare Workers (free plan)
 
-Status: **design** (phase A). Nothing here is built yet. The goal is to run the whole app on
+Status: **built, not deployed** (phases A�C done: see [What was built](#what-was-built-phase-b)).
+The goal is to run the whole app on
 Cloudflare Workers within the **Workers Free plan**: no Workers Paid, no paid add-ons, and no
 key-value-backed Durable Objects. CI deploys on every merge to `main`.
 
@@ -254,11 +255,11 @@ The app secrets are set once by hand with `wrangler secret put`; CI never sees t
 
 ## Phased task list
 
-- **B. Core seams** (no behaviour change): `Db` sync type, `Clock`, `Timers` port; move Node-only
+- **B. Core seams** (done): `Db` sync type, `Clock`, `Timers` port; move Node-only
   bits out of the core; `.changes` → `.returning()`; WebCrypto push sender (tests against
   `web-push`); password scheme `pbkdf2` alongside `scrypt`; persist login throttle, passkey
   challenges and OAuth state; `launching` marker on planned runs. Node stays green.
-- **C. Worker + Brain**: `apps/worker` with wrangler config (assets, `run_worker_first`,
+- **C. Worker + Brain** (done): `apps/worker` with wrangler config (assets, `run_worker_first`,
   `new_sqlite_classes: ["Brain"]`, one cron, `nodejs_compat`, pinned compat date), migrations
   bundle, alarm scheduler, edge checks, workerd test pool (alarm loop, rate-limit persistence
   across a simulated eviction, WebAuthn, migrations).
@@ -270,10 +271,80 @@ The app secrets are set once by hand with `wrangler secret put`; CI never sees t
 - **F. Cutover**: import tooling, mock-mode soak for a few days while watching the budget, then
   the migration plan above.
 
+## What was built (phase B)
+
+Phase B covered the design's phases B and C (core seams, then Worker + Brain) in one go.
+
+- **Core seams** (`apps/server/src`): `db/types.ts` (`Db` = any sync Drizzle SQLite DB; core
+  files import the type from there, never `db/index.ts`), `services.ts` (the object graph both
+  hosts build; `timers: 'node' | 'external'`), `app.ts` without Node imports (static serving and
+  `getConnInfo` moved to `index.ts`; `clientIp`, `onHookEvent`, `logRequests` options).
+  `.run().changes` became `.returning()`. Default `fetch` is wrapped in a closure in
+  `GcalService`/`OpenMeteoProvider`: workerd throws "Illegal invocation" when `fetch` is called
+  as a method of another object.
+- **State that was in memory** moved to migration `0006_durable_state`: `ephemeral` (passkey
+  challenges, Google OAuth `state`, login failures, each with an expiry) and `timers` (one-off
+  delayed work). Node uses the same code, so a restart no longer resets the login throttle.
+- **Rate limits across evictions**: `RateLimiter` writes `now + 20 s` (the call timeout) to the
+  lane **before** each call and the real finish time after it. A call killed mid-flight still
+  counts, conservatively. Workers always persist; Node still only with real taps.
+- **Launch marker**: the claimed planned run (`status = running`, `runId = null`) is the marker.
+  The engine keeps an in-memory set of launches it is running; a claimed row it isn't running
+  (after a restart/deploy) is never re-sent. After 5 min it adopts the run the poller,
+  webhooks or history saw (`schedule.run_unverified` event), or fails it as "Interrupted while
+  starting".
+- **Crypto**: passwords `pbkdf2$25000$�` on Workers (WebCrypto), `scrypt` on Node; either
+  verifies anywhere, and a hash in the other scheme is re-derived (sessions kept). Web Push is
+  `push/webpush.ts` (RFC 8291 aes128gcm + RFC 8292 VAPID over WebCrypto + `fetch`) on both
+  targets; `web-push` is now a dev dependency used to cross-check key compatibility. The test
+  reproduces RFC 8291's Appendix A body byte for byte. The Google token's AES-GCM `SecretBox`
+  stays on `node:crypto` (supported by `nodejs_compat`, exercised in workerd by the smoke test's
+  build, not by a Google round trip).
+- **Alarm wheel** (`runtime/wheel.ts`): tasks `timers > status > engine > devices > history >
+push > gcal`, due times computed from persisted state only:
+  - devices: the persisted `devices` lane + 5 min;
+  - status: only for outlets watering or with an open run, each outlet's own 31 s lane;
+  - history: newest `history:*` lane + 10 min overall, and only when some outlet's lane is free
+    (`pollHistoryNext` now skips outlets whose lane is cooling down, on Node too);
+  - engine: 30 s while a planned run is running or due within 2 min, else 5 min, but waking
+    1 min before the next planned occurrence; right away after a restart;
+  - push: when `max(events.id) > push.cursor`; gcal: `GcalService.nextDueAt()` (debounce,
+    backoff, 5 min periodic pass, at most 20 Google writes per pass in external mode);
+  - one-offs: `timers` rows, e.g. `reconcile:<deviceId>` 5 s after a run ends.
+    A wake spends at most 6 work units (devices 3, gcal 2, others 1; the first task always runs);
+    the rest runs on the next wake.
+- **BrainCore** (`runtime/brain.ts`, runtime-agnostic so Node tests run it on better-sqlite3 and
+  "evict" it by building a new one over the same DB): config from env, `PUBLIC_URL` from the
+  first request's origin when unset (stored as `app.publicUrl`; first one wins), `TRUST_PROXY`
+  always on (CF-Connecting-IP), `ENGINE_ENABLED` (default on in mock mode, off with real taps),
+  `insecureConfig` with a 20-char minimum password: weak secrets with real taps mean the engine
+  is off and every `/api` route but `/api/health` answers 503. After every request the alarm is
+  only moved earlier; after every alarm it is always re-set (clamped to 1 s � 10 min ahead), and
+  `alarm()` never throws. `ensureAlarm()` (cron) re-arms a missing alarm or one overdue > 2 min.
+- **apps/worker**: `wrangler.jsonc` (static assets from `apps/web/dist` with SPA fallback,
+  `run_worker_first` for `/api/*` and `/hooks/*`, `new_sqlite_classes: ["Brain"]`, one cron,
+  `nodejs_compat`, compat date 2026-11-01, wrangler pinned to 4.160.1), `src/index.ts` (Worker +
+  `Brain` DO: migrations in `blockConcurrencyWhile`), `src/edge.ts` (CSRF header, Origin, body
+  caps), `scripts/gen-migrations.mjs` (bundles `apps/server/drizzle` into
+  `src/migrations.gen.ts`; `build` fails if it is stale), generated `worker-configuration.d.ts`.
+- **Tests**: Node (`apps/server`): wheel due times, eviction keeps limits and one-off timers,
+  work budget, watchdog, PBKDF2 (RFC 7914 vector + node:crypto cross-check), RFC 8291 vector,
+  independent decryption, VAPID JWT verification, pre-call rate-limit mark, interrupted launches.
+  workerd (`apps/worker/test/worker.test.ts`, wrangler's `createTestHarness`, random port):
+  SPA fallback, `/api/health`, migrations, **`PRAGMA foreign_keys` = 1** (answers that open
+  question), edge CSRF refusal, PBKDF2 login, gateways after the first alarm, a real
+  `evictDurableObject` keeping the session and the devices lane, WebAuthn options, VAPID key
+  generation and push encryption, rrule schedules, webhook secret, cron. We did not use
+  `@cloudflare/vitest-pool-workers`: its latest (0.23.0) needs vitest 4 and pins wrangler 4.124.
+- **Bundle**: `wrangler deploy --dry-run`: 2,172 KiB, **409 KiB gzipped** (Free limit 3 MB
+  compressed, 64 MiB uncompressed).
+
 ## Open questions
 
 - Which DO CPU limit really applies on Free (10 ms vs 30 s). Measure in phase C; the design
   assumes 10 ms.
 - Per-object storage on Free (1 GB vs 10 GB). Retention keeps us far below 1 GB either way.
 - Whether cron invocations count as Worker requests (budgeted as if they do).
-- FK enforcement and `ON DELETE CASCADE` behaviour on DO SQLite (assumed same as D1: always on).
+- ~~FK enforcement on DO SQLite~~: on (`PRAGMA foreign_keys` = 1 in local workerd, phase B).
+- Real CPU per invocation on Cloudflare: local workerd doesn't enforce or report it. Check the
+  dashboard in the mock-mode soak (phase F) before cutover, especially the network overview.

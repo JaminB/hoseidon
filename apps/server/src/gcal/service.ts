@@ -8,7 +8,8 @@ import {
   type GcalSyncState,
 } from '@hoseidon/shared';
 import type { Config } from '../config';
-import type { Db } from '../db';
+import type { Db } from '../db/types';
+import { putEphemeral, takeEphemeral } from '../db/ephemeral';
 import { gcalAccount, gcalEvents, schedules, settings, type GcalAccountRow } from '../db/schema';
 import type { Executor } from '../schedule/executor';
 import { CalendarApi, GoogleApiError } from './calendar';
@@ -22,7 +23,9 @@ import {
   TokenSource,
   type OAuthClient,
 } from './oauth';
-import { applyOps, buildDesired, CalendarGoneError, diffSync, WINDOW_MS } from './sync';
+import { applyOps, buildDesired, CalendarGoneError, diffSync, WINDOW_MS, type Op } from './sync';
+
+const opKey = (op: Op) => (op.type === 'delete' ? op.row.key : op.item.key);
 
 const LOG_RUNS_KEY = 'gcal.logRuns';
 const STATE_TTL_MS = 10 * 60_000;
@@ -53,6 +56,15 @@ export interface GcalOptions {
   debounceMs?: number;
   /** Background reconcile, which picks up skips and finished runs. Default 5 min. */
   periodicMs?: number;
+  /**
+   * 'node' (default): debounce, backoff and the periodic pass run on setTimeout/setInterval.
+   * 'external': nothing runs by itself; the host asks `nextDueAt()` and calls `runDue()` (the
+   * Cloudflare alarm wheel). Each pass then applies at most `opsPerPass` changes and leaves the
+   * rest for the next wake instead of looping, to stay under the per-invocation subrequest cap.
+   */
+  timers?: 'node' | 'external';
+  /** Max Google writes per pass (external timers only). Default 20. */
+  opsPerPass?: number;
 }
 
 /** Backoff after the nth consecutive failure: 30 s, 1 min, 2 min ... capped at 30 min. */
@@ -66,13 +78,15 @@ export class GcalService {
   private readonly log: (msg: string) => void;
   private readonly box: SecretBox | null;
   private readonly client: OAuthClient;
-  private readonly pending = new Map<string, { verifier: string; at: number }>();
   private tokens: TokenSource | null = null;
 
   private timer: ReturnType<typeof setTimeout> | null = null;
   private timerAt: number | null = null;
   private interval: ReturnType<typeof setInterval> | null = null;
   private running: Promise<void> | null = null;
+  private lastPeriodicAt: number | null = null;
+  /** External mode: items Google rejected (400) last time; they go to the back of the line. */
+  private readonly rejected = new Set<string>();
   private dirty = false;
   private failures = 0;
   private inBackoff = false;
@@ -81,7 +95,9 @@ export class GcalService {
 
   constructor(private readonly opts: GcalOptions) {
     this.db = opts.db;
-    this.fetch = opts.fetch ?? globalThis.fetch;
+    // A wrapper, not globalThis.fetch itself: workerd throws "Illegal invocation" when fetch is
+    // called as a method of another object (CalendarApi calls this.opts.fetch(...)).
+    this.fetch = opts.fetch ?? ((input, init) => globalThis.fetch(input, init));
     this.now = opts.now ?? (() => new Date());
     this.log = opts.log ?? (() => {});
     const secret = opts.config.SESSION_SECRET;
@@ -151,7 +167,7 @@ export class GcalService {
     if (!this.connected) return 'paused';
     if (this.running) return 'running';
     if (this.inBackoff) return 'backoff';
-    if (this.timer) return 'pending';
+    if (this.timerAt !== null) return 'pending';
     return 'idle';
   }
 
@@ -199,10 +215,10 @@ export class GcalService {
     if (!this.configured)
       throw new Error(`Google Calendar isn't configured: set ${this.missing().join(', ')}`);
     const t = this.now().getTime();
-    for (const [k, v] of this.pending) if (t - v.at > STATE_TTL_MS) this.pending.delete(k);
     const state = randomBytes(24).toString('base64url');
     const { verifier, challenge } = pkcePair();
-    this.pending.set(state, { verifier, at: t });
+    // In the DB, not in memory: the callback may land after a restart (or a Worker eviction).
+    putEphemeral(this.db, `oauth:${state}`, verifier, new Date(t + STATE_TTL_MS));
     return authUrl(this.client, state, challenge);
   }
 
@@ -212,15 +228,13 @@ export class GcalService {
     error?: string;
   }): Promise<{ ok: true } | { ok: false; reason: ConnectFailure }> {
     if (!this.configured || !this.box) return { ok: false, reason: 'not_configured' };
-    const pending = q.state ? this.pending.get(q.state) : undefined;
-    if (q.state) this.pending.delete(q.state);
-    if (!pending || this.now().getTime() - pending.at > STATE_TTL_MS)
-      return { ok: false, reason: 'state' };
+    const verifier = q.state ? takeEphemeral(this.db, `oauth:${q.state}`, this.now()) : undefined;
+    if (!verifier) return { ok: false, reason: 'state' };
     if (q.error || !q.code) return { ok: false, reason: 'denied' };
 
     let token;
     try {
-      token = await exchangeCode(this.fetch, this.client, q.code, pending.verifier);
+      token = await exchangeCode(this.fetch, this.client, q.code, verifier);
     } catch (err) {
       this.log(`gcal: code exchange failed: ${(err as Error).message}`);
       return { ok: false, reason: 'exchange' };
@@ -339,9 +353,32 @@ export class GcalService {
 
   // ---- queue ------------------------------------------------------------------------------------
 
+  private get external() {
+    return this.opts.timers === 'external';
+  }
+
   start() {
-    this.interval ??= setInterval(() => this.request(0), this.opts.periodicMs ?? 5 * 60_000);
+    if (!this.external) {
+      this.interval ??= setInterval(() => this.request(0), this.opts.periodicMs ?? 5 * 60_000);
+    }
     this.request(0);
+  }
+
+  /** External timers: when `runDue` next has work (null = nothing until something changes). */
+  nextDueAt(): number | null {
+    if (!this.connected || this.running) return null;
+    const periodic = (this.lastPeriodicAt ?? 0) + (this.opts.periodicMs ?? 5 * 60_000);
+    return this.timerAt === null ? periodic : Math.min(this.timerAt, periodic);
+  }
+
+  /** External timers: run the periodic pass and/or a debounced or backed-off sync, if due. */
+  async runDue(now = this.now().getTime()): Promise<void> {
+    if (!this.connected) return;
+    if ((this.lastPeriodicAt ?? 0) + (this.opts.periodicMs ?? 5 * 60_000) <= now) {
+      this.lastPeriodicAt = now;
+      if (this.timerAt === null && !this.running) this.timerAt = now;
+    }
+    if (this.timerAt !== null && this.timerAt <= now) await this.syncNow();
   }
 
   stop() {
@@ -365,6 +402,7 @@ export class GcalService {
   private schedule(delayMs: number) {
     this.clearTimer();
     this.timerAt = this.now().getTime() + delayMs;
+    if (this.external) return;
     this.timer = setTimeout(() => {
       this.timer = null;
       this.timerAt = null;
@@ -411,6 +449,11 @@ export class GcalService {
       try {
         await this.reconcile();
         this.failures = 0;
+        if (this.external && this.dirty) {
+          // More to do: next wake, so one invocation stays within its subrequest budget.
+          this.schedule(0);
+          return;
+        }
       } catch (err) {
         if (err instanceof ReconnectRequired) {
           this.log(`gcal: reconnect needed: ${err.message}`);
@@ -466,7 +509,32 @@ export class GcalService {
         },
       });
       try {
-        const { errors, again } = await applyOps(this.db, api, calendarId, ops, desired, this.now);
+        // External mode applies a slice per pass. Items Google rejected last time go last, so
+        // they can't hog the slice and starve independent changes; and leftovers that are only
+        // rejected items wait for the periodic pass instead of looping straight away.
+        const perPass = this.opts.opsPerPass ?? 20;
+        const ordered = this.external
+          ? [
+              ...ops.filter((op) => !this.rejected.has(opKey(op))),
+              ...ops.filter((op) => this.rejected.has(opKey(op))),
+            ]
+          : ops;
+        const batch = this.external ? ordered.slice(0, perPass) : ops;
+        const { errors, again } = await applyOps(
+          this.db,
+          api,
+          calendarId,
+          batch,
+          desired,
+          this.now,
+        );
+        if (this.external) {
+          for (const op of batch) this.rejected.delete(opKey(op));
+          for (const e of errors) this.rejected.add(e.key);
+          if (ordered.slice(perPass).some((op) => !this.rejected.has(opKey(op)))) {
+            this.dirty = true;
+          }
+        }
         if (again) this.dirty = true;
         this.saveAccount({
           lastSyncAt: this.now(),

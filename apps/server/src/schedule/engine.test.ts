@@ -478,6 +478,91 @@ describe('SchedulerEngine', () => {
     expect(startCalls(h)).toHaveLength(0);
   });
 
+  describe('a restart (or a Cloudflare deploy) in the middle of a launch', () => {
+    /** The slot was claimed and maybe the start sent, then the process died. */
+    async function interrupted(h: H) {
+      await createSchedule(h);
+      vi.setSystemTime(at(0));
+      const [row] = planned(h);
+      h.db
+        .update(plannedRuns)
+        .set({ status: 'running', updatedAt: at(0) })
+        .where(eq(plannedRuns.id, row!.id))
+        .run();
+      return row!;
+    }
+
+    it('never re-sends, and fails the run when nothing shows it started', async () => {
+      const h = await setup();
+      await interrupted(h);
+      const fresh = new SchedulerEngine({ db: h.db, executor: h.executor });
+      vi.setSystemTime(at(2));
+      await fresh.tick();
+      expect(planned(h)[0]!.status).toBe('running'); // still waiting for evidence
+      vi.setSystemTime(at(6));
+      await fresh.tick();
+      expect(planned(h)[0]).toMatchObject({
+        status: 'failed',
+        error: 'Interrupted while starting',
+      });
+      expect(startCalls(h)).toHaveLength(0);
+    });
+
+    it('does not adopt an unrelated run that started later', async () => {
+      const h = await setup();
+      await interrupted(h);
+      // Someone ran the zone by hand 4 minutes later: not this launch.
+      h.db
+        .insert(runs)
+        .values({
+          deviceId: MOCK_IDS.frontLawn,
+          startedAt: at(4),
+          plannedSec: 1800,
+          source: 'manual',
+          status: 'running',
+        })
+        .run();
+      const fresh = new SchedulerEngine({ db: h.db, executor: h.executor });
+      vi.setSystemTime(at(6));
+      await fresh.tick();
+      expect(planned(h)[0]).toMatchObject({ status: 'failed', runId: null });
+      const manual = h.db.select().from(runs).where(eq(runs.source, 'manual')).get();
+      expect(manual).toMatchObject({ plannedSec: 1800, scheduleId: null });
+    });
+
+    it('adopts the run LinkTap reports, and flags it', async () => {
+      const h = await setup();
+      const row = await interrupted(h);
+      // The start did go out: the poller later saw the zone watering.
+      h.db
+        .insert(runs)
+        .values({
+          deviceId: MOCK_IDS.frontLawn,
+          startedAt: at(0.2),
+          plannedSec: null,
+          source: 'linktap',
+          status: 'running',
+        })
+        .run();
+      const fresh = new SchedulerEngine({ db: h.db, executor: h.executor });
+      vi.setSystemTime(at(6));
+      await fresh.tick();
+      const p = planned(h)[0]!;
+      expect(p.status).toBe('running');
+      expect(p.runId).not.toBeNull();
+      const run = h.db.select().from(runs).where(eq(runs.id, p.runId!)).get()!;
+      expect(run).toMatchObject({ source: 'hoseidon', scheduleId: row.scheduleId });
+      expect(
+        h.db
+          .select()
+          .from(events)
+          .all()
+          .some((e) => e.type === 'schedule.run_unverified'),
+      ).toBe(true);
+      expect(startCalls(h)).toHaveLength(0);
+    });
+  });
+
   it('does not overlap ticks', async () => {
     const h = await setup();
     await createSchedule(h);

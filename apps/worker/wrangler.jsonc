@@ -1,0 +1,35 @@
+// Hoseidon on Cloudflare Workers, Free plan only. See docs/cloudflare.md.
+// Secrets (never in this file): wrangler secret put LINKTAP_USERNAME / LINKTAP_API_KEY /
+// ADMIN_PASSWORD / SESSION_SECRET / WEBHOOK_SECRET / GOOGLE_CLIENT_SECRET.
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "hoseidon",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-11-01",
+  "compatibility_flags": ["nodejs_compat"],
+  // The built PWA. Asset requests are free and never run the Worker; only /api and /hooks do.
+  "assets": {
+    "directory": "../web/dist",
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application",
+    "run_worker_first": ["/api/*", "/hooks/*"],
+  },
+  // One SQLite-backed Durable Object holds all state. The Free plan only has SQLite DOs.
+  "durable_objects": {
+    "bindings": [{ "name": "BRAIN", "class_name": "Brain" }],
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Brain"] }],
+  // Watchdog only (re-arms a dead alarm). 144 runs/day; the alarm does the real work.
+  "triggers": { "crons": ["*/10 * * * *"] },
+  "vars": {
+    // true = the built-in fake LinkTap. Switch to "false" only at cutover, together with
+    // ENGINE_ENABLED = "true" (the engine stays off with real taps until you say so).
+    "LINKTAP_MOCK": "true",
+    // PUBLIC_URL: leave unset to use the first request's origin (the *.workers.dev URL), or set
+    // it to your custom domain. GOOGLE_CLIENT_ID and TZ go here too.
+  },
+  // Workers Logs is included in the Free plan (daily event cap). Invocation logs are off: they
+  // record request URLs, and the LinkTap webhook's secret is in its path. App logs stay on.
+  "observability": { "enabled": true, "logs": { "enabled": true, "invocation_logs": false } },
+  "upload_source_maps": true,
+}

@@ -1,5 +1,4 @@
 import { eq, gt, asc, sql } from 'drizzle-orm';
-import { generateVAPIDKeys, sendNotification } from 'web-push';
 import {
   DEFAULT_PUSH_PREFS,
   type PushPayload,
@@ -8,10 +7,13 @@ import {
   type PushSubscriptionInput,
 } from '@hoseidon/shared';
 import type { Config } from '../config';
-import type { Db } from '../db';
+import type { Db } from '../db/types';
 import { getJson, getSetting, setSetting } from '../db/kv';
 import { events, pushSubscriptions, type PushSubscriptionRow } from '../db/schema';
 import { pushCategory, pushPayload } from './classify';
+import { generateVapidKeys, sendWebPush, type VapidKeys } from './webpush';
+
+export type { VapidKeys };
 
 const VAPID_KEY = 'push.vapid';
 const PREFS_KEY = 'push.prefs';
@@ -21,11 +23,6 @@ const DEDUPE_MS = 10 * 60_000;
 /** More than this in one pass collapses into a summary, so an outage doesn't spam a phone. */
 const MAX_PER_FLUSH = 4;
 
-export interface VapidKeys {
-  publicKey: string;
-  privateKey: string;
-}
-
 /** Sends one notification. Throws an error carrying `statusCode` when the push service refuses. */
 export type PushSender = (
   sub: { endpoint: string; keys: { p256dh: string; auth: string } },
@@ -33,16 +30,9 @@ export type PushSender = (
   vapid: VapidKeys & { subject: string },
 ) => Promise<unknown>;
 
+/** WebCrypto + fetch (push/webpush.ts): the same code on Node and on Cloudflare Workers. */
 const webPushSender: PushSender = (sub, payload, vapid) =>
-  sendNotification(sub, payload, {
-    TTL: 3600,
-    urgency: 'high',
-    vapidDetails: {
-      subject: vapid.subject,
-      publicKey: vapid.publicKey,
-      privateKey: vapid.privateKey,
-    },
-  });
+  sendWebPush(sub, payload, vapid, { ttl: 3600, urgency: 'high' });
 
 export interface PushOptions {
   db: Db;
@@ -82,11 +72,14 @@ export class PushService {
 
   // ---- keys and settings ----------------------------------------------------------------------
 
-  vapid(): VapidKeys {
+  async vapid(): Promise<VapidKeys> {
     const { db } = this.o;
     const saved = getJson<VapidKeys>(db, VAPID_KEY);
     if (saved?.publicKey && saved.privateKey) return saved;
-    const keys = generateVAPIDKeys();
+    const keys = await generateVapidKeys();
+    // Another caller may have raced us across the await: the first saved pair wins.
+    const again = getJson<VapidKeys>(db, VAPID_KEY);
+    if (again?.publicKey && again.privateKey) return again;
     setSetting(db, VAPID_KEY, JSON.stringify(keys));
     return keys;
   }
@@ -108,12 +101,33 @@ export class PushService {
     return next;
   }
 
-  status(): PushStatus {
-    const { n } = this.o.db
+  subscriptionCount(): number {
+    return this.o.db
       .select({ n: sql<number>`count(*)` })
       .from(pushSubscriptions)
-      .get()!;
-    return { publicKey: this.vapid().publicKey, subscriptions: n, prefs: this.prefs() };
+      .get()!.n;
+  }
+
+  async status(): Promise<PushStatus> {
+    return {
+      publicKey: (await this.vapid()).publicKey,
+      subscriptions: this.subscriptionCount(),
+      prefs: this.prefs(),
+    };
+  }
+
+  /** Events written since the last flush (or no cursor yet): flush() has work to do. */
+  hasPending(): boolean {
+    const { db } = this.o;
+    const cursor = getSetting(db, CURSOR_KEY);
+    if (cursor === undefined) return true;
+    const last = db
+      .select({ id: events.id })
+      .from(events)
+      .orderBy(sql`${events.id} desc`)
+      .limit(1)
+      .get();
+    return (last?.id ?? 0) > Number(cursor);
   }
 
   // ---- subscriptions --------------------------------------------------------------------------
@@ -138,7 +152,7 @@ export class PushService {
     const { db, log } = this.o;
     const subs = db.select().from(pushSubscriptions).all();
     if (!subs.length) return { sent: 0, failed: 0 };
-    const vapid = { ...this.vapid(), subject: this.subject() };
+    const vapid = { ...(await this.vapid()), subject: this.subject() };
     const body = JSON.stringify(payload);
     const results = await Promise.allSettled(subs.map((s) => this.sendOne(s, body, vapid)));
     const failed = results.filter((r) => r.status === 'rejected');

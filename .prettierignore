@@ -5,3 +5,6 @@ pnpm-workspace.yaml
 data
 dev-dist
 apps/server/drizzle/meta
+apps/worker/src/worker-configuration.d.ts
+apps/worker/src/migrations.gen.ts
+.wrangler

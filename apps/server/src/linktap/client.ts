@@ -111,13 +111,16 @@ export interface LinkTapClient {
   setWebHookUrl(url: string): Promise<void>;
 }
 
+/** The HTTP transport gives up on a call after this long. */
+export const CALL_TIMEOUT_MS = 20_000;
+
 export function httpTransport(baseUrl = LINKTAP_BASE_URL, fetchImpl = fetch): Transport {
   return async (endpoint, body) => {
     const res = await fetchImpl(new URL(endpoint, baseUrl), {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify(body),
-      signal: AbortSignal.timeout(20_000),
+      signal: AbortSignal.timeout(CALL_TIMEOUT_MS),
     });
     if (!res.ok) throw new LinkTapError(endpoint, `HTTP ${res.status}`, 'http');
     return res.json();
@@ -136,7 +139,12 @@ export interface ClientOptions {
 
 export function createLinkTapClient(opts: ClientOptions): LinkTapClient {
   const now = opts.now ?? Date.now;
-  const limiter = new RateLimiter<Bucket>({ ...LINKTAP_LIMITS, ...opts.limits }, now, opts.store);
+  const limiter = new RateLimiter<Bucket>(
+    { ...LINKTAP_LIMITS, ...opts.limits },
+    now,
+    opts.store,
+    CALL_TIMEOUT_MS,
+  );
   const stats = new CallStats(now);
 
   /** limiter.schedule, plus how long the call waited in the queue (for the Network page). */

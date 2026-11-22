@@ -13,12 +13,16 @@ export default tseslint.config(
       'data/**',
       'apps/web/public/push-sw.js',
       'apps/web/scripts/**',
+      '**/.wrangler/**',
+      // Generated (wrangler types, scripts/gen-migrations.mjs).
+      'apps/worker/src/worker-configuration.d.ts',
+      'apps/worker/src/migrations.gen.ts',
     ],
   },
   js.configs.recommended,
   ...tseslint.configs.recommended,
   {
-    files: ['apps/server/**/*.ts', 'packages/**/*.ts'],
+    files: ['apps/server/**/*.ts', 'apps/worker/**/*.{ts,mjs}', 'packages/**/*.ts'],
     languageOptions: { globals: globals.node },
   },
   {

@@ -4,7 +4,8 @@
 
 **God of the garden hose.**
 
-A beautiful, self-hosted PWA for [LinkTap](https://www.link-tap.com) smart water timers.
+A beautiful PWA for [LinkTap](https://www.link-tap.com) smart water timers. Runs free on
+Cloudflare Workers, or on your own box with Docker.
 Because the official app has the charm of a leaky faucet.
 
 </div>
@@ -35,11 +36,14 @@ keeps your lawn alive without a single "Oops, something went wrong" toast.
 - [x] Per-sprinkler analytics next to weather: water vs rain/ET₀, run duration, flow, heatmap, skips, water saved
 - [x] Installable PWA (offline shell, last-known data) with push notifications for alarms, offline devices and failed or skipped runs
 - [x] Password login (plus optional passkeys), CSRF-protected API
+- [x] Runs on the Cloudflare Workers Free plan (one Worker, one SQLite Durable Object), or in Docker
 
 ## Stack
 
 React + Vite + Tailwind v4 + TanStack Query on the front, Hono + Drizzle + SQLite on the back,
-Zod schemas shared between them. One Docker container, one SQLite file. No cloud of our own.
+Zod schemas shared between them. The same server core runs in two hosts: a Cloudflare Worker
+with one SQLite-backed Durable Object (`apps/worker`, the primary deployment) or one Node
+process with one SQLite file (`apps/server`, Docker).
 
 ## Quick start (development)
 
@@ -58,7 +62,52 @@ once, then `pnpm --filter @hoseidon/web e2e`. It boots its own mock server and d
 ports 8797 and 5179, seeds a few schedules, and saves screenshots of every page (phone and
 desktop, light and dark) to `apps/web/e2e/__screenshots__/`. CI uploads them as an artifact.
 
+## Deploying to Cloudflare Workers (recommended, free)
+
+Hoseidon fits the **Workers Free plan**: no paid plan, no paid add-ons, no credit card. One
+Worker serves the built PWA as static assets and forwards `/api/*` and `/hooks/*` to a single
+SQLite-backed Durable Object ("Brain") that runs the API, the poller, the scheduler, push and
+Google sync off one alarm. A cron every 10 minutes is a watchdog. The design, limits and daily
+budget are in [docs/cloudflare.md](docs/cloudflare.md).
+
+```sh
+pnpm install
+pnpm build                                   # web app + `wrangler deploy --dry-run` bundle
+cd apps/worker
+pnpm exec wrangler login
+# Secrets (never in wrangler.jsonc). ADMIN_PASSWORD: 20+ random chars, e.g. openssl rand -base64 18
+pnpm exec wrangler secret put ADMIN_PASSWORD
+pnpm exec wrangler secret put SESSION_SECRET    # openssl rand -hex 32
+pnpm exec wrangler secret put WEBHOOK_SECRET
+pnpm exec wrangler deploy
+```
+
+It starts with `LINKTAP_MOCK=true` (fake taps). Open the `*.workers.dev` URL, sign in, look
+around.
+
+> **Keep `LINKTAP_MOCK=true` on Workers for now.** Real taps wait for phase D of
+> [docs/cloudflare.md](docs/cloudflare.md) (budget meter, snapshot retention, a network overview
+> under the 10 ms CPU budget) and the cutover in phase F. Until then, real watering runs on the
+> Node/Docker target. As a safety net, with real taps the Worker keeps the poller and scheduler
+> off unless `ENGINE_ENABLED` is `"true"`, and refuses to run with weak secrets.
+
+Free-plan notes:
+
+- `PUBLIC_URL` can stay unset: the first request's origin (your `*.workers.dev` URL) is adopted
+  and remembered. Set it as a var for a custom domain (passkeys, push and Google OAuth are bound
+  to it).
+- Static assets are free and unlimited; only `/api` and `/hooks` count against the 100,000
+  requests a day. A household uses roughly a tenth of every daily limit (see the budget in
+  docs/cloudflare.md). Over a limit, Cloudflare returns errors until 00:00 UTC; it never bills.
+- Every LinkTap rate limit is stored in the Durable Object before each call, so deploys and
+  evictions can't make Hoseidon call LinkTap too early, and a deploy in the middle of a
+  scheduled start never sends it twice.
+- Local dev of the Worker: copy `apps/worker/.dev.vars.example` to `.dev.vars`, then
+  `pnpm --filter @hoseidon/worker dev` (workerd on <http://localhost:8799>).
+
 ## Running with Docker
+
+The Node target is kept for running on your own box.
 
 ```sh
 cp .env.example .env     # fill in your values
@@ -69,15 +118,17 @@ Then open <http://localhost:8787>. Data lives in the `hoseidon-data` volume (SQL
 
 ## Configuration
 
-See [`.env.example`](./.env.example). Highlights:
+See [`.env.example`](./.env.example) (Node) or `apps/worker/wrangler.jsonc` and
+`apps/worker/.dev.vars.example` (Cloudflare: vars and secrets with the same names). Highlights:
 
-| Variable                                    | What it does                                                                                                                                      |
-| ------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `LINKTAP_USERNAME` / `LINKTAP_API_KEY`      | Your LinkTap cloud credentials (link-tap.com, API section)                                                                                        |
-| `LINKTAP_MOCK`                              | `true` uses a fake LinkTap server. Set `false` for real hardware                                                                                  |
-| `ADMIN_PASSWORD` / `SESSION_SECRET`         | The admin password (hashed with scrypt; changing it signs everyone out) and a long random string. `SESSION_SECRET` also encrypts the Google token |
-| `PUBLIC_URL` / `WEBHOOK_SECRET`             | Where LinkTap webhooks and Google OAuth call back                                                                                                 |
-| `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` | Optional Google Calendar sync                                                                                                                     |
+| Variable                                    | What it does                                                                                                                                                                 |
+| ------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `LINKTAP_USERNAME` / `LINKTAP_API_KEY`      | Your LinkTap cloud credentials (link-tap.com, API section)                                                                                                                   |
+| `LINKTAP_MOCK`                              | `true` uses a fake LinkTap server. Set `false` for real hardware                                                                                                             |
+| `ADMIN_PASSWORD` / `SESSION_SECRET`         | The admin password (hashed with scrypt on Node, PBKDF2 on Workers; changing it signs everyone out) and a long random string. `SESSION_SECRET` also encrypts the Google token |
+| `PUBLIC_URL` / `WEBHOOK_SECRET`             | Where LinkTap webhooks and Google OAuth call back                                                                                                                            |
+| `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` | Optional Google Calendar sync                                                                                                                                                |
+| `ENGINE_ENABLED` / `TZ`                     | Cloudflare only: allow the poller and scheduler with real taps (off until `true`), and the default time zone                                                                 |
 
 ### Google Calendar sync
 
@@ -127,10 +178,10 @@ the server) and register `http://localhost:5173/api/gcal/callback` as a second r
 The refresh token is stored encrypted (AES-256-GCM, key derived from `SESSION_SECRET`). Changing
 `SESSION_SECRET` means reconnecting. See [docs/gcal.md](docs/gcal.md) for how the sync works.
 
-### Cloudflare Tunnel (webhooks, push, off-LAN access)
+### Cloudflare Tunnel (Docker only: webhooks, push, off-LAN access)
 
-_Coming soon._ This section will cover creating a tunnel, setting `CLOUDFLARE_TUNNEL_TOKEN`, and
-starting the optional profile with `docker compose --profile tunnel up -d`.
+Not needed on Workers. For Docker: create a tunnel, set `CLOUDFLARE_TUNNEL_TOKEN`, and start the
+optional profile with `docker compose --profile tunnel up -d`.
 
 ### Schedules
 

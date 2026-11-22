@@ -122,6 +122,37 @@ describe('RateLimiter', () => {
     expect(starts).toEqual([10_000]);
   });
 
+  it('persists the lane before the call goes out, so a call killed mid-flight still counts', async () => {
+    const saved = new Map<string, number>();
+    const store = {
+      get: (k: string) => saved.get(k),
+      set: (k: string, t: number) => void saved.set(k, t),
+    };
+    const specs = { slow: { intervalMs: 10_000 } };
+    const t0 = Date.now();
+    let seenDuringCall: number | undefined;
+    // The process "dies" during the call: the promise never settles.
+    void new RateLimiter(specs, Date.now, store, 20_000).schedule('slow', () => {
+      seenDuringCall = saved.get('slow');
+      return new Promise<void>(() => {});
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    // Written before the call ran: now + the longest a call can take.
+    expect(seenDuringCall).toBe(t0 + 20_000);
+
+    // After the "eviction", a new limiter waits interval past that conservative mark.
+    vi.setSystemTime(t0 + 5_000);
+    const revived = new RateLimiter(specs, Date.now, store, 20_000);
+    expect(revived.nextAvailableAt('slow').getTime()).toBe(t0 + 30_000);
+    const starts: number[] = [];
+    const call = revived.schedule('slow', async () => void starts.push(Date.now() - t0));
+    await vi.runAllTimersAsync();
+    await call;
+    expect(starts).toEqual([30_000]);
+    // And the real finish time replaces the mark afterwards.
+    expect(saved.get('slow')).toBe(t0 + 30_000);
+  });
+
   it('runs a priority call ahead of queued background calls', async () => {
     const limiter = make();
     const order: string[] = [];
