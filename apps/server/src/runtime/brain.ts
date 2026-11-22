@@ -142,6 +142,8 @@ export class BrainCore {
       db: this.db,
       services: this.services,
       engineEnabled: this.engineOn,
+      // Monitoring never depends on ENGINE_ENABLED; only missing/weak secrets stop it.
+      pollingEnabled: !this.problems.length,
       log: this.log,
     });
     this.app = this.makeApp(timeZone);

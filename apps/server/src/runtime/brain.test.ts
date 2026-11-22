@@ -387,4 +387,18 @@ describe('BrainCore requests', () => {
     expect(setup({ ...env, ENGINE_ENABLED: 'true' }).make(stub).engineOn).toBe(true);
     expect(setup(ENV).make().engineOn).toBe(true);
   });
+
+  it('still polls LinkTap with real taps when the engine is off (monitor only)', () => {
+    const stub = new Proxy({} as LinkTapClient, { get: () => () => new Date() });
+    const brain = setup({
+      ...ENV,
+      LINKTAP_MOCK: 'false',
+      LINKTAP_USERNAME: 'someone',
+      LINKTAP_API_KEY: 'k',
+    }).make(stub);
+    expect(brain.engineOn).toBe(false);
+    const due = brain.wheel.dueTimes(Date.now());
+    expect(due.devices).not.toBeNull();
+    expect(due.engine).toBeNull();
+  });
 });
