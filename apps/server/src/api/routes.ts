@@ -11,7 +11,7 @@ import {
   type DeviceDetail,
   type GatewayWithDevices,
 } from '@hoseidon/shared';
-import type { Db } from '../db';
+import type { Db } from '../db/types';
 import { devices, deviceSnapshots, events, gateways, runs } from '../db/schema';
 import type { LinkTapClient } from '../linktap/client';
 import type { Poller } from '../poller';

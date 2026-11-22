@@ -17,3 +17,9 @@ apps/web/e2e/__screenshots__/
 apps/web/e2e/.results/
 apps/web/e2e/.report/
 apps/web/e2e/.auth/
+
+# Wrangler local state (Miniflare storage, smoke-test config)
+.wrangler/
+.dev.vars
+.dev.vars.*
+!.dev.vars.example

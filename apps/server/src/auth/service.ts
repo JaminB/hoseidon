@@ -9,10 +9,17 @@ import {
   type RegistrationResponseJSON,
 } from '@simplewebauthn/server';
 import type { Config } from '../config';
-import type { Db } from '../db';
+import type { Db } from '../db/types';
 import { deleteSetting, getSetting, setSetting } from '../db/kv';
+import {
+  deleteEphemeral,
+  listEphemeral,
+  pruneEphemeral,
+  putEphemeral,
+  takeEphemeral,
+} from '../db/ephemeral';
 import { passkeys, sessions } from '../db/schema';
-import { hashPassword, verifyPassword } from './password';
+import { hashPassword, schemeOf, verifyPassword, type PasswordScheme } from './password';
 
 export const SESSION_TTL_MS = 30 * 24 * 3600_000;
 const HASH_KEY = 'auth.passwordHash';
@@ -22,7 +29,7 @@ const MAX_FAILURES = 8;
 /** Safety cap across all clients, high enough that a few strangers can't lock the owner out. */
 const MAX_GLOBAL_FAILURES = 100;
 const FAILURE_WINDOW_MS = 15 * 60_000;
-const USER_ID = new TextEncoder().encode('hoseidon-admin');
+const USER_ID = new Uint8Array(new TextEncoder().encode('hoseidon-admin'));
 
 const sha256 = (s: string) => createHash('sha256').update(s).digest('hex');
 
@@ -35,16 +42,20 @@ export interface AuthOptions {
   config: Config;
   now?: () => number;
   log?: (msg: string) => void;
+  /** How a new password hash is made. Default scrypt; Workers use pbkdf2 (CPU budget). */
+  passwordScheme?: PasswordScheme;
 }
 
+const FAIL_PREFIX = 'loginfail:';
+const CHALLENGE_PREFIX = 'challenge:';
+
 /**
- * One admin. The password comes from ADMIN_PASSWORD (hashed with scrypt into the settings table,
- * and re-synced if the env value changes). A passkey can be added from Settings once signed in.
- * Sessions are random cookie tokens; only their hash is stored.
+ * One admin. The password comes from ADMIN_PASSWORD (hashed into the settings table, and re-synced
+ * if the env value changes). A passkey can be added from Settings once signed in. Sessions are
+ * random cookie tokens; only their hash is stored. Login failures and passkey challenges live in
+ * the `ephemeral` table, so a restart (or a Durable Object eviction) doesn't reset them.
  */
 export class AuthService {
-  private failures = new Map<string, number[]>();
-  private challenges = new Map<string, { challenge: string; expires: number }>();
   private readonly now: () => number;
   private ready: Promise<void>;
 
@@ -70,10 +81,12 @@ export class AuthService {
       log?.('ADMIN_PASSWORD is not set: nobody can sign in until it is.');
       return;
     }
-    if (stored && (await verifyPassword(config.ADMIN_PASSWORD, stored))) return;
-    setSetting(db, HASH_KEY, await hashPassword(config.ADMIN_PASSWORD));
-    // A changed password signs everyone out.
-    if (stored) db.delete(sessions).run();
+    const scheme = this.o.passwordScheme ?? 'scrypt';
+    const same = !!stored && (await verifyPassword(config.ADMIN_PASSWORD, stored));
+    if (same && schemeOf(stored) === scheme) return;
+    setSetting(db, HASH_KEY, await hashPassword(config.ADMIN_PASSWORD, scheme));
+    // A changed password signs everyone out (a re-hash of the same one under another scheme doesn't).
+    if (stored && !same) db.delete(sessions).run();
   }
 
   get configured(): boolean {
@@ -92,13 +105,9 @@ export class AuthService {
     const stored = getSetting(this.o.db, HASH_KEY);
     if (!stored) return { ok: false, reason: 'unconfigured' };
     const now = this.now();
-    for (const [k, list] of this.failures) {
-      const live = list.filter((t) => now - t < FAILURE_WINDOW_MS);
-      if (live.length) this.failures.set(k, live);
-      else this.failures.delete(k);
-    }
-    const mine = this.failures.get(client) ?? [];
-    const all = [...this.failures.values()].flat().sort((a, b) => a - b);
+    const failures = this.failures(now);
+    const mine = failures.get(client) ?? [];
+    const all = [...failures.values()].flat().sort((a, b) => a - b);
     const throttledBy =
       mine.length >= MAX_FAILURES ? mine : all.length >= MAX_GLOBAL_FAILURES ? all : null;
     if (throttledBy) {
@@ -106,11 +115,31 @@ export class AuthService {
       return { ok: false, reason: 'throttled', retryAfterSec };
     }
     if (!(await verifyPassword(password, stored))) {
-      this.failures.set(client, [...mine, now]);
+      putEphemeral(
+        this.o.db,
+        FAIL_PREFIX + client,
+        JSON.stringify([...mine, now]),
+        new Date(now + FAILURE_WINDOW_MS),
+      );
       return { ok: false, reason: 'invalid' };
     }
-    this.failures.delete(client);
+    if (mine.length) deleteEphemeral(this.o.db, FAIL_PREFIX + client);
     return { ok: true, ...this.createSession() };
+  }
+
+  /** Recent wrong-password times per client, oldest first. */
+  private failures(now: number): Map<string, number[]> {
+    const out = new Map<string, number[]>();
+    for (const row of listEphemeral(this.o.db, FAIL_PREFIX, new Date(now))) {
+      let list: number[] = [];
+      try {
+        list = (JSON.parse(row.value) as number[]).filter((t) => now - t < FAILURE_WINDOW_MS);
+      } catch {
+        // A corrupt entry just doesn't count.
+      }
+      if (list.length) out.set(row.key.slice(FAIL_PREFIX.length), list);
+    }
+    return out;
   }
 
   createSession(): { token: string; expiresAt: Date } {
@@ -119,6 +148,7 @@ export class AuthService {
     db.delete(sessions)
       .where(lt(sessions.expiresAt, new Date(now)))
       .run();
+    pruneEphemeral(db, new Date(now));
     const token = randomBytes(32).toString('base64url');
     const expiresAt = new Date(now + SESSION_TTL_MS);
     db.insert(sessions)
@@ -157,17 +187,15 @@ export class AuthService {
 
   private remember(challenge: string): string {
     const now = this.now();
-    for (const [k, v] of this.challenges) if (v.expires < now) this.challenges.delete(k);
+    pruneEphemeral(this.o.db, new Date(now));
     const id = randomBytes(16).toString('base64url');
-    this.challenges.set(id, { challenge, expires: now + CHALLENGE_TTL_MS });
+    putEphemeral(this.o.db, CHALLENGE_PREFIX + id, challenge, new Date(now + CHALLENGE_TTL_MS));
     return id;
   }
 
   /** One use only: a challenge that was tried (even wrongly) can't be tried again. */
   private take(id: string): string | undefined {
-    const c = this.challenges.get(id);
-    this.challenges.delete(id);
-    return c && c.expires > this.now() ? c.challenge : undefined;
+    return takeEphemeral(this.o.db, CHALLENGE_PREFIX + id, new Date(this.now()));
   }
 
   listPasskeys() {
@@ -175,7 +203,10 @@ export class AuthService {
   }
 
   removePasskey(id: string): boolean {
-    return this.o.db.delete(passkeys).where(eq(passkeys.id, id)).run().changes > 0;
+    return (
+      this.o.db.delete(passkeys).where(eq(passkeys.id, id)).returning({ id: passkeys.id }).all()
+        .length > 0
+    );
   }
 
   async registrationOptions() {
@@ -243,7 +274,7 @@ export class AuthService {
       expectedRPID: this.rp.id,
       credential: {
         id: row.id,
-        publicKey: Buffer.from(row.publicKey, 'base64url'),
+        publicKey: new Uint8Array(Buffer.from(row.publicKey, 'base64url')),
         counter: row.counter,
         transports: row.transports as never,
       },

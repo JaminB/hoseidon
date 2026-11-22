@@ -1,5 +1,5 @@
 import { eq } from 'drizzle-orm';
-import type { Db } from './index';
+import type { Db } from './types';
 import { settings } from './schema';
 
 export function getSetting(db: Pick<Db, 'select'>, key: string): string | undefined {
@@ -14,6 +14,11 @@ export function setSetting(db: Pick<Db, 'insert'>, key: string, value: string): 
 }
 
 const LAST_CALL_KEY = 'linktap.lastCall';
+
+/** Every persisted lane time (lane -> epoch ms), e.g. to find the newest history call. */
+export function lastCalls(db: Pick<Db, 'select'>): Record<string, number> {
+  return getJson<Record<string, number>>(db, LAST_CALL_KEY) ?? {};
+}
 
 /** Rate-limit memory backed by the settings table (one JSON object, lane -> epoch ms). */
 export function settingsLastCallStore(db: Db): {

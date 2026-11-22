@@ -6,7 +6,7 @@ import {
   type AnalyticsSummary,
   type SkipReasonKind,
 } from '@hoseidon/shared';
-import type { Db } from '../db';
+import type { Db } from '../db/types';
 import { plannedRuns, runs } from '../db/schema';
 import { fromWall, parseLocal } from '../schedule/time';
 import { addDays, dateInZone, dateRange } from '../weather/dates';

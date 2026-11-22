@@ -1,7 +1,7 @@
 import { and, eq, gte, lte } from 'drizzle-orm';
 import { z } from 'zod';
 import type { WeatherDay } from '@hoseidon/shared';
-import type { Db } from '../db';
+import type { Db } from '../db/types';
 import { weatherDaily, type WeatherDailyRow } from '../db/schema';
 import type { WeatherLocation, WeatherOutlook, WeatherProvider } from '../schedule/weather';
 import { addDays, dateInZone, dateRange, diffDays, isValidTimeZone } from './dates';
@@ -70,7 +70,8 @@ export class OpenMeteoProvider implements WeatherProvider {
   private readonly now: () => Date;
 
   constructor(private readonly o: WeatherServiceOptions) {
-    this.fetchFn = o.fetch ?? fetch;
+    // Wrapped: workerd rejects fetch called as a method of another object (this.fetchFn(...)).
+    this.fetchFn = o.fetch ?? ((input, init) => fetch(input, init));
     this.now = o.now ?? (() => new Date());
   }
 

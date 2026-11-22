@@ -1,0 +1,17 @@
+# Secrets for `pnpm --filter @hoseidon/worker dev` (local workerd on :8799). Copy to .dev.vars.
+# In production set each with `wrangler secret put <NAME>`; never commit real values.
+
+# Workers hashes passwords with fast PBKDF2 (CPU budget), so with LINKTAP_MOCK=false the
+# password must be 20+ random characters: openssl rand -base64 18
+ADMIN_PASSWORD=change-me-to-20-plus-random-chars
+# 16+ chars; also encrypts the Google refresh token: openssl rand -hex 32
+SESSION_SECRET=change-me-to-a-long-random-string
+WEBHOOK_SECRET=change-me-too
+
+# Real taps only (keep LINKTAP_MOCK=true in wrangler.jsonc until cutover).
+LINKTAP_USERNAME=
+LINKTAP_API_KEY=
+
+# Optional Google Calendar sync. GOOGLE_CLIENT_ID can be a plain var in wrangler.jsonc.
+GOOGLE_CLIENT_ID=
+GOOGLE_CLIENT_SECRET=

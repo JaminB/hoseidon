@@ -9,7 +9,8 @@ RUN corepack enable
 WORKDIR /repo
 COPY . .
 RUN pnpm install --frozen-lockfile
-RUN pnpm build
+# The Node image needs the web app and the server only (apps/worker is the Cloudflare target).
+RUN pnpm --filter @hoseidon/web --filter @hoseidon/server build
 # Production-only server bundle with native modules (better-sqlite3) resolved.
 RUN pnpm --filter @hoseidon/server deploy --prod /out
 

@@ -8,6 +8,10 @@
  * - A `priority` call goes ahead of every queued non-priority call in its lane (used for the
  *   scheduler's start check, so background polling can't starve it).
  * - A failed call still consumes its slot: LinkTap counts it too.
+ * - With a store, the lane's time is written BEFORE the call goes out (as "now + inflightMs", the
+ *   longest a call can take) and again with the real finish time after. A process killed
+ *   mid-call (a crash, or a Cloudflare deploy evicting the Durable Object) therefore still
+ *   counts that call when it comes back, instead of firing a second one too early.
  */
 
 export interface BucketSpec {
@@ -56,6 +60,8 @@ export class RateLimiter<B extends string = string> {
     private readonly specs: Record<B, BucketSpec>,
     private readonly now: () => number = Date.now,
     private readonly store?: LastCallStore,
+    /** Upper bound on one call's duration, for the pre-call mark (0 = no pre-call write). */
+    private readonly inflightMs = 0,
   ) {}
 
   /** Queue `fn` in `bucket` (see ScheduleOptions). */
@@ -145,6 +151,9 @@ export class RateLimiter<B extends string = string> {
         if (!job) break;
         let ok = true;
         let value: unknown;
+        if (this.store && this.inflightMs > 0) {
+          this.store.set(laneKey, this.now() + this.inflightMs);
+        }
         try {
           value = await job.run();
         } catch (err) {

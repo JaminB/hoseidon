@@ -1,7 +1,7 @@
 import { createHash, timingSafeEqual } from 'node:crypto';
 import { Hono } from 'hono';
 import { z } from 'zod';
-import type { Db } from '../db';
+import type { Db } from '../db/types';
 import { ingestWebhook } from '../poller/ingest';
 
 /** LinkTap webhook body: {username, event, title, content, gatewayId, deviceId, workMode?}. */

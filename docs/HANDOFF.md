@@ -520,3 +520,63 @@ Real 1-minute instant runs on a 4-outlet ValveLinker. Details in `docs/linktap-a
   runs count as requests, and FK enforcement on DO SQLite are unresolved in the docs; phase C
   measures them.
 - `@simplewebauthn/server` and the planned WebCrypto push sender are untested in workerd.
+
+## Cloudflare phase B: Worker + Brain (built, not deployed)
+
+**What exists**
+
+- `apps/worker`: the Cloudflare host. `wrangler.jsonc` (static assets from `apps/web/dist` with
+  SPA fallback, `run_worker_first` for `/api/*` and `/hooks/*`, one SQLite-backed `Brain`
+  Durable Object, cron `*/10 * * * *` watchdog, `nodejs_compat`, compat date 2026-11-01,
+  `LINKTAP_MOCK=true`), `src/index.ts` (Worker + `Brain`), `src/edge.ts` (CSRF/Origin/body-size
+  checks before a DO request is spent), `scripts/gen-migrations.mjs` → `src/migrations.gen.ts`,
+  `src/worker-configuration.d.ts` (`wrangler types`), `.dev.vars.example`. Scripts: `dev`
+  (workerd on :8799), `build` (= `wrangler deploy --dry-run --outdir dist`), `deploy`, `types`,
+  `gen`, `test`.
+- `apps/server/src/runtime/`: `wheel.ts` (the alarm's timer wheel: due times from persisted
+  state, priority order, work budget per wake, `timers` table for one-offs) and `brain.ts`
+  (`BrainCore`: the whole DO minus Cloudflare glue, tested on better-sqlite3).
+- `apps/server/src/services.ts` builds the object graph for both hosts; `index.ts` (Node) uses
+  it with `timers: 'node'` and now owns static serving and `getConnInfo`.
+- `db/types.ts` (`Db` for any sync Drizzle SQLite), `db/ephemeral.ts` + migration
+  `0006_durable_state` (`ephemeral`, `timers`): passkey challenges, OAuth state and the login
+  throttle are persisted on both targets.
+- `push/webpush.ts`: WebCrypto Web Push (RFC 8291 + 8292) replaces the `web-push` package (now a
+  dev dependency). `auth/password.ts`: `pbkdf2$25000$…` alongside `scrypt$…`.
+- `RateLimiter` persists `now + 20 s` before each call (store set) and the finish time after.
+- Engine: in-process launch set; an interrupted launch (claimed, no run, not ours) is never
+  re-sent: after 5 min it adopts the run LinkTap reported or fails.
+- Config: `ENGINE_ENABLED` (Workers; default on with mock, off with real taps), `TZ`;
+  `insecureConfig(config, { minAdminPassword })` (20 on Workers).
+- Bundle (`wrangler deploy --dry-run`): 2,172 KiB, 409 KiB gzipped (Free limit 3 MB compressed).
+
+**Conventions**
+
+- Core files import `type { Db }` from `db/types`, never from `db` (that is Node-only:
+  better-sqlite3). Anything Node-only (fs, `@hono/node-server`) stays in `index.ts`/`db/index.ts`.
+- Core code is type-checked twice: by `apps/server` (@types/node) and by `apps/worker` (workerd
+  runtime types + @types/node). Where the two disagree (WebCrypto details), type locally and
+  loosely (see `push/webpush.ts`).
+- Don't pass `globalThis.fetch` as an object property and call it as a method: workerd throws
+  "Illegal invocation". Wrap it: `(input, init) => fetch(input, init)`.
+- After `db:generate`, run `pnpm --filter @hoseidon/worker gen` (its build and tests fail on a
+  stale `migrations.gen.ts`). After editing `wrangler.jsonc`, `pnpm --filter @hoseidon/worker types`.
+- pnpm allowlist gained `workerd`. Docker builds only `@hoseidon/web` and `@hoseidon/server`.
+
+**Known gaps**
+
+- No real deploy yet and no CI deploy job (phase E). CI already runs the dry-run bundle in
+  `pnpm build` and the workerd smoke test in `pnpm test`.
+- Phase D is not done: no SQL meter / `/api/budget`, no snapshot retention or hourly rollups,
+  materialize still runs every engine tick, and the network overview (17–41 ms) is still over the
+  10 ms budget. Don't switch real taps on Workers before D.
+- CPU per invocation on Cloudflare is unmeasured (local workerd doesn't enforce it).
+- A start verification still waits inside the alarm (20–50 s, up to ~2 min with rate-limit
+  retries); other due tasks wait behind it in that wake.
+- Push dedupe (`recent`), the gcal debounce/backoff timer and LinkTap API stats are in memory on
+  Workers: an eviction resets them (the periodic gcal pass catches up within 5 min).
+- `PUBLIC_URL` adoption is first-origin-wins; moving to a custom domain needs the var set.
+- WebAuthn is exercised in workerd only up to option generation (no authenticator in tests);
+  the Google OAuth/Calendar path and `SecretBox` were not run in workerd.
+- `@cloudflare/vitest-pool-workers` was not used (needs vitest 4, pins wrangler 4.124); the
+  workerd tests use wrangler's `createTestHarness` instead.

@@ -1,6 +1,6 @@
 import { eq } from 'drizzle-orm';
 import { DEFAULT_WEAK_SIGNAL_PCT } from '@hoseidon/shared';
-import type { Db } from '../db';
+import type { Db } from '../db/types';
 import { settings } from '../db/schema';
 
 const WEAK_SIGNAL_KEY = 'network.weakSignalPct';

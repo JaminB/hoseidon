@@ -1,6 +1,6 @@
-import { and, eq, gte, inArray, isNotNull, isNull, lt } from 'drizzle-orm';
+import { and, asc, eq, gte, inArray, isNotNull, isNull, lt } from 'drizzle-orm';
 import type { PlannedRunStatus, RunStatus } from '@hoseidon/shared';
-import type { Db } from '../db';
+import type { Db } from '../db/types';
 import {
   devices,
   gateways,
@@ -33,6 +33,8 @@ export interface EngineOptions {
   /** After a run's time is up, wait this long for the poller to close it. Default 2 min. */
   finishGraceMs?: number;
   log?: (msg: string) => void;
+  /** The host calls tick() (the Cloudflare alarm wheel) instead of start(). */
+  external?: boolean;
 }
 
 export interface EngineStatus {
@@ -77,8 +79,8 @@ function localTime(at: Date, timeZone: string) {
  *    (when the schedule is sequential), and a zone's next cycle waits out its soak.
  */
 export class SchedulerEngine {
-  private readonly o: Required<Omit<EngineOptions, 'log' | 'weather'>> &
-    Pick<EngineOptions, 'log'> & { weather: WeatherProvider };
+  private readonly o: Required<Omit<EngineOptions, 'log' | 'weather' | 'external'>> &
+    Pick<EngineOptions, 'log' | 'external'> & { weather: WeatherProvider };
   private timer: NodeJS.Timeout | undefined;
   private busy = false;
   private lastTickAt: Date | null = null;
@@ -86,6 +88,8 @@ export class SchedulerEngine {
   /** Counts Stop requests; a launch aborts if its device was stopped after it began. */
   private stopSeq = 0;
   private readonly stoppedAt = new Map<string, number>();
+  /** Planned runs this process is starting right now (claimed, start not yet recorded). */
+  private readonly launching = new Set<number>();
 
   constructor(opts: EngineOptions) {
     this.o = {
@@ -111,9 +115,14 @@ export class SchedulerEngine {
     this.timer = undefined;
   }
 
+  /** When the last tick began (null until the first one in this process). */
+  lastTick(): Date | null {
+    return this.lastTickAt;
+  }
+
   status(): EngineStatus {
     return {
-      running: this.timer !== undefined,
+      running: this.timer !== undefined || !!this.o.external,
       executor: this.o.executor.kind,
       lastTickAt: this.lastTickAt?.toISOString() ?? null,
       lastError: this.lastError,
@@ -199,9 +208,13 @@ export class SchedulerEngine {
     for (const p of active) {
       db.transaction((tx) => {
         if (p.runId === null) {
-          // Crashed between claiming the slot and recording the start.
+          // Claimed but no start recorded. If this process isn't starting it, it was interrupted
+          // mid-launch (crash, restart, or a Cloudflare deploy evicting the Durable Object), maybe
+          // after the command went out. Never send it again: wait for the poller/webhooks/history
+          // to show what happened, then adopt that run or call it failed.
+          if (this.launching.has(p.id)) return;
           if (now.getTime() - p.updatedAt.getTime() > 5 * 60_000) {
-            update(tx, p.id, { status: 'failed', error: 'Interrupted while starting' }, now);
+            this.settleInterrupted(tx, p, now);
           }
           return;
         }
@@ -225,6 +238,42 @@ export class SchedulerEngine {
         update(tx, p.id, { status: 'done', endedAt }, now);
       });
     }
+  }
+
+  private settleInterrupted(tx: Db, p: PlannedRunRow, now: Date): void {
+    const seen = tx
+      .select()
+      .from(runs)
+      .where(
+        and(
+          eq(runs.deviceId, p.deviceId),
+          gte(runs.startedAt, new Date(p.updatedAt.getTime() - 5_000)),
+        ),
+      )
+      .orderBy(asc(runs.startedAt))
+      .get();
+    if (!seen) {
+      update(tx, p.id, { status: 'failed', error: 'Interrupted while starting' }, now);
+      return;
+    }
+    tx.update(runs)
+      .set({ source: 'hoseidon', scheduleId: p.scheduleId, plannedSec: p.seconds })
+      .where(eq(runs.id, seen.id))
+      .run();
+    update(tx, p.id, { runId: seen.id, startedAt: seen.startedAt }, now);
+    insertEvents(tx, [
+      {
+        at: now,
+        type: 'schedule.run_unverified',
+        source: 'hoseidon',
+        severity: 'warn',
+        gatewayId: p.gatewayId,
+        deviceId: p.deviceId,
+        title: 'A scheduled start was interrupted',
+        message: 'Hoseidon restarted while starting this run; LinkTap shows it ran.',
+        data: { scheduleId: p.scheduleId, plannedRunId: p.id, runId: seen.id },
+      },
+    ]);
   }
 
   // ---- 2. materialize -------------------------------------------------------------------------
@@ -546,7 +595,7 @@ export class SchedulerEngine {
   }
 
   private async launch(row: PlannedRunRow, s: ScheduleRow, device: DeviceRow, now: Date) {
-    const { db, executor } = this.o;
+    const { db } = this.o;
     // Claim the slot first so a concurrent skip/edit can't touch it mid-start.
     const claimed = db
       .update(plannedRuns)
@@ -555,6 +604,16 @@ export class SchedulerEngine {
       .returning()
       .get();
     if (!claimed) return;
+    this.launching.add(row.id);
+    try {
+      await this.launchClaimed(row, s, device);
+    } finally {
+      this.launching.delete(row.id);
+    }
+  }
+
+  private async launchClaimed(row: PlannedRunRow, s: ScheduleRow, device: DeviceRow) {
+    const { db, executor } = this.o;
     const ref = { id: device.id, gatewayId: device.gatewayId };
     const seenStops = this.stopSeq;
     const stopped = () => (this.stoppedAt.get(device.id) ?? 0) > seenStops;

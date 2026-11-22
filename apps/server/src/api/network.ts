@@ -9,7 +9,7 @@ import {
   type NetworkOverview,
   type NetworkSettings,
 } from '@hoseidon/shared';
-import type { Db } from '../db';
+import type { Db } from '../db/types';
 import { deviceSnapshots, devices, events, gateways, plannedRuns } from '../db/schema';
 import type { LinkTapClient } from '../linktap/client';
 import type { Poller } from '../poller';

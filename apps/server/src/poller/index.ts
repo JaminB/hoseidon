@@ -1,5 +1,5 @@
 import { and, eq, gt, isNotNull, or } from 'drizzle-orm';
-import type { Db } from '../db';
+import type { Db } from '../db/types';
 import { devices, gateways, runs } from '../db/schema';
 import { isRateLimitError, LINKTAP_LIMITS, type LinkTapClient } from '../linktap/client';
 import { resolveGatewayLocation } from '../linktap/location';
@@ -40,6 +40,14 @@ export interface PollerOptions {
   log?: (msg: string) => void;
   /** fetch used for geocoding LinkTap's gateway location (tests and mock mode stub it). */
   fetch?: typeof fetch;
+  /**
+   * Hand the post-run history reconcile to the host instead of a setTimeout (the Cloudflare
+   * alarm wheel persists it, so it survives an eviction). When set it is used even without
+   * start(); the host then calls reconcileHistory(deviceId) at `at`.
+   */
+  scheduleReconcile?: (deviceId: string, at: Date) => void;
+  /** The host drives the tasks (alarm wheel) instead of start(); status() reports running. */
+  external?: boolean;
 }
 
 /**
@@ -89,7 +97,10 @@ export class Poller {
   }
 
   status(): PollerStatus {
-    return { running: this.timers.length > 0, last: structuredClone(this.last) };
+    return {
+      running: this.timers.length > 0 || !!this.opts.external,
+      last: structuredClone(this.last),
+    };
   }
 
   /** getAllDevices -> gateways, devices, snapshots, runs, derived events. */
@@ -167,6 +178,10 @@ export class Poller {
 
   /** While running, fetch a finished outlet's history shortly after its run ends. */
   private scheduleReconcile(deviceId: string) {
+    if (this.opts.scheduleReconcile) {
+      this.opts.scheduleReconcile(deviceId, new Date(Date.now() + this.intervals.reconcileMs));
+      return;
+    }
     if (!this.timers.length) return;
     const t = setTimeout(() => {
       this.reconcileTimers.delete(t);
@@ -221,8 +236,12 @@ export class Poller {
         .all();
       const touched = (r: (typeof rows)[number]) =>
         Math.max(r.fetchedAt?.getTime() ?? 0, this.historyAttempts.get(r.id) ?? 0);
-      // Stable sort: least recently touched first (never-fetched devices are 0).
-      const ordered = rows.sort((a, b) => touched(a) - touched(b));
+      // Stable sort: least recently touched first (never-fetched devices are 0). Skip outlets
+      // whose own history slot is still cooling down (a reconcile or start check just used it):
+      // background polling never waits in the queue.
+      const free = (r: (typeof rows)[number]) =>
+        client.nextAvailableAt('history', r.id).getTime() <= Date.now() + 1_000;
+      const ordered = rows.filter(free).sort((a, b) => touched(a) - touched(b));
 
       const recentlyFinished = ordered.find(
         (r) =>

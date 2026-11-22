@@ -6,7 +6,7 @@ import type {
   Incident,
   IncidentSource,
 } from '@hoseidon/shared';
-import type { Db } from '../db';
+import type { Db } from '../db/types';
 import { deviceSnapshots, devices, events, gateways } from '../db/schema';
 import { baseId } from '../linktap/normalize';
 import {

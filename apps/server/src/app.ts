@@ -1,11 +1,8 @@
-import { existsSync, readFileSync } from 'node:fs';
-import { relative, resolve } from 'node:path';
-import { Hono } from 'hono';
+import { Hono, type Context } from 'hono';
 import { logger } from 'hono/logger';
-import { serveStatic } from '@hono/node-server/serve-static';
 import type { Health } from '@hoseidon/shared';
 import type { Config } from './config';
-import type { Db } from './db';
+import type { Db } from './db/types';
 import type { LinkTapClient } from './linktap/client';
 import type { Poller } from './poller';
 import { apiRoutes } from './api/routes';
@@ -48,6 +45,18 @@ export interface AppDeps {
   push?: PushService;
   /** Require a session on /api. Only tests turn this off. Default true. */
   requireAuth?: boolean;
+  /**
+   * The caller's address, for login throttling. Node reads the socket (node-host.ts); Workers
+   * use CF-Connecting-IP. Default: proxy headers when TRUST_PROXY, else "unknown".
+   */
+  clientIp?: (c: Context) => string | undefined;
+  /** Log requests (default: unless NODE_ENV=test). */
+  logRequests?: boolean;
+  /**
+   * After a LinkTap webhook was stored. Default: poll running outlets and flush push now. The
+   * Cloudflare host passes a no-op and lets its alarm wheel pick the work up.
+   */
+  onHookEvent?: () => void;
 }
 
 export function createApp({
@@ -63,9 +72,12 @@ export function createApp({
   auth = new AuthService({ db, config }),
   push = new PushService({ db, config }),
   requireAuth = true,
+  clientIp,
+  onHookEvent,
+  logRequests = globalThis.process?.env?.NODE_ENV !== 'test',
 }: AppDeps) {
   const app = new Hono();
-  if (process.env.NODE_ENV !== 'test') {
+  if (logRequests) {
     // The webhook secret lives in the path; keep it out of the logs.
     app.use(logger((msg, ...rest) => console.log(redactSecrets(msg), ...rest)));
   }
@@ -83,7 +95,7 @@ export function createApp({
   if (requireAuth) api.use('*', apiGuard({ auth, publicUrl: config.PUBLIC_URL }));
   api.route(
     '/',
-    authRoutes({ auth, publicUrl: config.PUBLIC_URL, trustProxy: config.TRUST_PROXY }),
+    authRoutes({ auth, publicUrl: config.PUBLIC_URL, trustProxy: config.TRUST_PROXY, clientIp }),
   );
   api.route('/', settingsRoutes({ db, config, linktap, poller, push, activeTimeZone: timeZone }));
   api.route('/', apiRoutes({ db, linktap, poller, scheduler, mock: config.LINKTAP_MOCK }));
@@ -112,23 +124,15 @@ export function createApp({
       db,
       secret: config.WEBHOOK_SECRET,
       username: config.LINKTAP_USERNAME || undefined,
-      onEvent: () => {
-        void poller?.pollRunning();
-        void push.flush();
-      },
+      onEvent:
+        onHookEvent ??
+        (() => {
+          void poller?.pollRunning();
+          void push.flush();
+        }),
     }),
   );
 
-  // Production: serve the built PWA, with SPA fallback to index.html.
-  const webRoot = resolve(config.WEB_DIST);
-  const indexPath = resolve(webRoot, 'index.html');
-  if (existsSync(indexPath)) {
-    const index = readFileSync(indexPath, 'utf8');
-    // serveStatic wants a root relative to the cwd.
-    const root = relative(process.cwd(), webRoot).replace(/\\/g, '/') || '.';
-    app.use('*', serveStatic({ root }));
-    app.get('*', (c) => c.html(index));
-  }
-
+  // The built PWA is served by the host: node-host.ts (serveStatic) or Cloudflare's assets.
   return app;
 }
