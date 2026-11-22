@@ -4,6 +4,7 @@ import { insecureConfig, loadConfig } from './config';
 import { openDb } from './db';
 import { settingsLastCallStore } from './db/kv';
 import { linktapFromConfig } from './linktap';
+import { mockGeocodeFetch } from './linktap/location';
 import { Poller } from './poller';
 import { SchedulerEngine } from './schedule/engine';
 import { CloudExecutor } from './schedule/executor';
@@ -36,7 +37,13 @@ const { client: linktap } = linktapFromConfig(
   config,
   config.LINKTAP_MOCK ? undefined : settingsLastCallStore(db),
 );
-const poller = new Poller({ db, client: linktap, timeZone, log });
+const poller = new Poller({
+  db,
+  client: linktap,
+  timeZone,
+  log,
+  fetch: config.LINKTAP_MOCK ? mockGeocodeFetch : undefined,
+});
 const executor = new CloudExecutor({ client: linktap });
 // Offline demo: the mock serves Open-Meteo-shaped weather so the real cache code runs too.
 const weather = new OpenMeteoProvider({

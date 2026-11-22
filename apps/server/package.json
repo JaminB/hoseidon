@@ -18,6 +18,7 @@
     "better-sqlite3": "^13.2.0",
     "drizzle-orm": "^0.45.4",
     "hono": "^4.13.19",
+    "open-location-code": "^1.0.3",
     "rrule": "^2.8.1",
     "web-push": "^4.0.0",
     "zod": "^4.6.7"

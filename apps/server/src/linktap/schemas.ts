@@ -27,9 +27,17 @@ export const rawTaplinkerSchema = z.looseObject({
   batteryStatus: z.union([z.string(), z.number()]).nullish(),
   signal: z.union([z.string(), z.number()]).nullish(),
   workMode: z.string().nullish(),
+  dType: num,
+  flowMeterStatus: z.string().nullish(),
+  /** Last/current flow rate, ml/min. Present even when `watering` is null. */
+  vel: num,
+  /** Last instant-mode plan: { action, duration, Y, X (month), Z (day), H, M, eco... }. */
+  plan: z.looseObject({}).nullish(),
   watering: rawWateringSchema.nullish(),
   noWater: flag,
   valveBroken: flag,
+  /** Real API name for the "device fell over" alarm; `fallFlag` is kept for older docs. */
+  fall: flag,
   fallFlag: flag,
   leakFlag: flag,
   clogFlag: flag,
@@ -61,7 +69,7 @@ export const getAllDevicesSchema = okSchema.extend({
 
 export const getWateringStatusSchema = okSchema.extend({ status: rawWateringSchema.nullish() });
 
-/** One history record: start date/time in gateway-local time, duration, volume (G2 only). */
+/** One history record: END date/time in gateway-local time, duration, volume. */
 export const rawHistoryEntrySchema = z.looseObject({
   Y: z.union([z.string(), z.number()]),
   H: num,
@@ -70,11 +78,18 @@ export const rawHistoryEntrySchema = z.looseObject({
   D: num,
   S: num,
   vol: num,
+  /** Work mode the run happened under (e.g. "M"). */
+  cm: z.string().nullish(),
+  /** ISO UTC time LinkTap stored the record (sometimes batched later than the event). */
+  createdAt: z.string().nullish(),
+  macaddr: z.string().nullish(),
 });
 export type RawHistoryEntry = z.infer<typeof rawHistoryEntrySchema>;
 
 export const getWateringHistorySchema = okSchema.extend({
+  // Verified against the live API: the records come back under `status` (the same key
+  // getWateringStatus uses). `history`/`data` are kept in case other firmware differs.
+  status: z.array(rawHistoryEntrySchema).nullish(),
   history: z.array(rawHistoryEntrySchema).nullish(),
-  // Some integrations report the array under `data`; accept either.
   data: z.array(rawHistoryEntrySchema).nullish(),
 });

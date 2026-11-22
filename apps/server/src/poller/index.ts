@@ -2,6 +2,7 @@ import { and, eq, gt, isNotNull, or } from 'drizzle-orm';
 import type { Db } from '../db';
 import { devices, gateways, runs } from '../db/schema';
 import type { LinkTapClient } from '../linktap/client';
+import { resolveGatewayLocation } from '../linktap/location';
 import { ingestDevices, ingestHistory, ingestWateringStatus } from './ingest';
 
 export interface PollerIntervals {
@@ -31,6 +32,8 @@ export interface PollerOptions {
   timeZone: string;
   intervals?: Partial<PollerIntervals>;
   log?: (msg: string) => void;
+  /** fetch used for geocoding LinkTap's gateway location (tests and mock mode stub it). */
+  fetch?: typeof fetch;
 }
 
 /**
@@ -83,7 +86,24 @@ export class Poller {
     return this.guard('devices', async () => {
       const polled = await this.opts.client.getAllDevices();
       ingestDevices(this.opts.db, polled, new Date());
+      await this.resolveLocations();
     });
+  }
+
+  /**
+   * Turn each gateway's LinkTap location string into lat/lon/time zone. Cheap when nothing
+   * changed: a gateway is only geocoded when its location string differs from the last attempt
+   * and the user hasn't set one by hand. Failures are logged and never fail the poll.
+   */
+  async resolveLocations(): Promise<void> {
+    const { db, log } = this.opts;
+    for (const g of db.select({ id: gateways.id }).from(gateways).all()) {
+      try {
+        await resolveGatewayLocation(db, g.id, { fetch: this.opts.fetch, log });
+      } catch (err) {
+        log?.(`gateway ${g.id}: location lookup failed: ${(err as Error).message}`);
+      }
+    }
   }
 
   /** getWateringStatus for each device that is (or we think is) watering. */

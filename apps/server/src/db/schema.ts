@@ -41,10 +41,18 @@ export const gateways = sqliteTable('gateways', {
   name: text('name'),
   status: text('status'),
   online: integer('online', { mode: 'boolean' }).notNull().default(false),
-  /** Location is not available from LinkTap; set once by the user. */
+  /** Set automatically from LinkTap's location string, or by the user (locationSource). */
   lat: real('lat'),
   lon: real('lon'),
   timezone: text('timezone'),
+  /** Who set lat/lon/timezone. Automatic resolution never overwrites 'manual'. */
+  locationSource: text('location_source').$type<'linktap' | 'manual'>(),
+  /** LinkTap's `location` string (Plus Code + locality), as last reported. */
+  locationRaw: text('location_raw'),
+  /** The locationRaw we last tried to resolve, so we only geocode when it changes. */
+  locationResolvedFor: text('location_resolved_for'),
+  /** Gateway firmware version. */
+  version: text('version'),
   lastSeenAt: ts('last_seen_at'),
   raw: text('raw', { mode: 'json' }),
   createdAt: createdAt(),
@@ -74,6 +82,14 @@ export const devices = sqliteTable(
       .notNull()
       .default(sql`'[]'`),
     watering: text('watering', { mode: 'json' }).$type<Watering | null>(),
+    /** Raw LinkTap `dType` (16 = 4-outlet ValveLinker). */
+    dType: integer('d_type'),
+    /** flowMeterStatus === 'on'; null when not reported. */
+    flowMeter: integer('flow_meter', { mode: 'boolean' }),
+    /** Top-level `vel`: last/current flow in ml/min, kept while idle. */
+    flowMlPerMin: real('flow_ml_per_min'),
+    /** LinkTap's last instant-mode `plan` object, as reported. */
+    plan: text('plan', { mode: 'json' }),
     lastSeenAt: ts('last_seen_at'),
     /** Last successful getWateringHistory fetch. */
     historyFetchedAt: ts('history_fetched_at'),
@@ -98,6 +114,8 @@ export const deviceSnapshots = sqliteTable(
     signalPct: real('signal_pct'),
     workMode: text('work_mode').$type<WorkMode>(),
     watering: integer('watering', { mode: 'boolean' }).notNull().default(false),
+    /** `vel` at poll time, ml/min (also when not watering). */
+    flowMlPerMin: real('flow_ml_per_min'),
     alarms: text('alarms', { mode: 'json' })
       .$type<AlarmFlag[]>()
       .notNull()
@@ -125,6 +143,8 @@ export const runs = sqliteTable(
     scheduleId: integer('schedule_id'),
     status: text('status').$type<RunStatus>().notNull(),
     note: text('note'),
+    /** LinkTap work mode from history (`cm`), e.g. "M". */
+    mode: text('mode'),
     createdAt: createdAt(),
   },
   (t) => [

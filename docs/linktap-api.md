@@ -11,6 +11,7 @@ constant in `apps/server/src/linktap/`.
 - [Cloud API](#cloud-api)
 - [Endpoints](#endpoints)
 - [Data shapes](#data-shapes)
+- [Verified against live API (2026-11-22)](#verified-against-live-api-2026-11-22)
 - [Rate limits](#rate-limits)
 - [Webhooks](#webhooks)
 - [Local gateway API (HTTP / MQTT)](#local-gateway-api-http--mqtt)
@@ -90,7 +91,8 @@ but this endpoint can't clear them.
 
 ## Data shapes
 
-All of these are **inferred**. Hoseidon parses them with loose zod schemas (`looseObject`), so
+The shapes below were inferred before the first live capture. The next section records what the
+real API actually returned and supersedes them where they differ. Hoseidon parses them with loose zod schemas (`looseObject`), so
 unknown keys pass through and are kept in `raw` JSON on snapshots.
 
 ### `getAllDevices`
@@ -109,12 +111,12 @@ unknown keys pass through and are kept in `raw` JSON on snapshots.
           "taplinkerName": "Front Lawn",
           "status": "Connected",
           "batteryStatus": "80%", // string with %
-          "signal": "66%", // RF signal to the gateway
+          "signal": "66%", // RF signal to the gateway (live API: a number, e.g. 88)
           "workMode": "M", // see below
           "watering": null, // or { remaining, total, vel, vol }
           "noWater": false,
           "valveBroken": false,
-          "fallFlag": false,
+          "fallFlag": false, // live API: "fall"
           "leakFlag": false,
           "clogFlag": false,
           "pcFlag": false,
@@ -147,13 +149,131 @@ unknown keys pass through and are kept in `raw` JSON on snapshots.
 
 This returns 30 days of records: `{ Y: "YYYYMMDD", H, M, ss, D, S, vol }`.
 
-- `Y`, `H`, `M` and `ss` are the start time in the gateway's local time.
+- `Y`, `H`, `M` and `ss` are the end time in the gateway's local time.
 - `D` (minutes) plus `S` (seconds) is the duration.
 - `vol` is in ml (G2 only).
 
-The response key is **unverified**. Hoseidon accepts `history` or `data`. It converts the local
+The response key is `status` (verified; Hoseidon also accepts `history` or `data`). The time is
+the run's **end** (see the verified section). It converts the local
 times to UTC using the gateway's `timezone`, which the user sets, falling back to the server's
 `TZ`.
+
+## Verified against live API (2026-11-22)
+
+First real captures (one gateway, one 4-outlet ValveLinker with flow meter). IDs and the location
+below are sanitized; the shapes are exactly as received. Sanitized copies are the test fixtures in
+`apps/server/src/linktap/fixtures/`.
+
+### `getAllDevices`
+
+```jsonc
+{
+  "result": "ok",
+  "devices": [
+    {
+      "name": "Gateway",
+      "location": "849VCWC8+R9 Mountain View, CA, USA", // Google Plus Code + locality
+      "gatewayId": "A1B2C3D4004B1200",
+      "status": "Connected",
+      "version": "G0609472606040836I_C0502012507221443", // gateway firmware
+      "taplinker": [
+        {
+          "taplinkerName": "ValveLinker_1",
+          "taplinkerId": "E5F60718004B1200_1",
+          "status": "Connected",
+          "flowMeterStatus": "on",
+          "location": "Not specified", // taplinkers don't carry a location
+          "dType": 16, // 16 = 4-outlet ValveLinker
+          "batteryStatus": "100%", // string with %
+          "workMode": "M",
+          "plan": {
+            // last instant-mode plan; absent when workMode is "N"
+            "action": false,
+            "duration": 0,
+            "Y": 2026,
+            "X": 11, // month
+            "Z": 21, // day
+            "H": 19,
+            "M": 55,
+            "eco": false,
+            "ecoOn": 1,
+            "ecoOff": 1,
+            "ecoOnS": 0,
+            "ecoOffS": 0,
+            "wType": "d",
+            "multi": false,
+          },
+          "watering": null,
+          "vel": 9911, // top-level flow, ml/min (last/current), present while idle
+          "fall": false, // NOT "fallFlag"
+          "valveBroken": false,
+          "noWater": false,
+          "leakFlag": false,
+          "clogFlag": false,
+          "signal": 88, // a number, not "88%"
+        },
+      ],
+    },
+  ],
+}
+```
+
+- The fall alarm is `fall` (Hoseidon also accepts `fallFlag`). `pcFlag` and `pbFlag` were absent;
+  Hoseidon treats absent as not raised and still maps them if a firmware sends them.
+- `signal` is a number and `batteryStatus` is `"100%"`; `parsePercent` handles both.
+- `vel` is **top-level**, not inside `watering`. A 30 minute run used 294219 ml (about 9.8 L/min)
+  and `vel` read about 9911, so it is ml/min. It keeps the last value when idle, so Hoseidon
+  stores it as `flowMlPerMin` on every snapshot and only displays it while watering.
+- `flowMeterStatus: "on"` means a flow meter is fitted. Hoseidon hides flow charts when it is
+  present and not `on`.
+- `dType` is stored raw. `plan` is stored on the device as reported (not interpreted).
+- The gateway `location` is a Plus Code, short or full, followed by a locality. Hoseidon
+  recovers the full code near the geocoded locality (`open-location-code` + Open-Meteo geocoding)
+  and sets the gateway's lat/lon and time zone unless the user set a location by hand.
+  "Not specified" or anything unparseable leaves it unset.
+
+### `getWateringStatus`
+
+An idle outlet returned `{"result":"ok","status":null}`, as assumed. The shape of a running
+outlet is still unseen, so `WATERING_TIME_UNIT_SEC` (minutes vs seconds for
+`remaining`/`total`/`onDuration`) stays **unverified**.
+
+### `getWateringHistory`
+
+The records are under **`status`** (an array), not `history`/`data`:
+
+```jsonc
+{
+  "result": "ok",
+  "status": [
+    {
+      "macaddr": "E5F60718004B1200_1",
+      "Y": 20261118, // YYYYMMDD
+      "H": 14,
+      "M": 16,
+      "ss": 58,
+      "D": 30, // minutes
+      "S": 0, // seconds
+      "vol": 294219, // ml
+      "cm": "M", // optional: work mode the run happened under
+      "createdAt": "2026-11-18T19:16:59.557Z", // ISO UTC, when the record was stored
+      "__v": 0,
+    },
+  ],
+}
+```
+
+- `Y/H/M/ss` is when the run **ended**, in the gateway's local time (19:24:09Z matched 14:24:08
+  EST). The start is the end minus `D`/`S`.
+- `createdAt` is more precise but sometimes batched days after the event (11-15 entries stamped
+  11-18). Hoseidon uses it only when it is within 2 minutes of the local-time conversion.
+- Entries with `D` and `S` both 0 are not runs and are dropped. `cm` is kept as the run's `mode`.
+
+### Resolved and still open
+
+- Resolved: the history response key (`status`), the `fall` flag name, numeric `signal`.
+- Still unverified: watering time units for a running outlet, webhook event strings, which
+  endpoints require 16-char ids, and whether the rate limits are per account or per device.
 
 ## Rate limits
 

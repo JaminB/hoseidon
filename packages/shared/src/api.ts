@@ -62,6 +62,12 @@ export const deviceSchema = z.object({
   workMode: workModeSchema.nullable(),
   alarms: z.array(alarmFlagSchema),
   watering: wateringSchema.nullable(),
+  /** Raw LinkTap device type (16 = 4-outlet ValveLinker). */
+  dType: z.number().nullable().default(null),
+  /** Whether a flow meter is fitted (flowMeterStatus === "on"); null when LinkTap doesn't say. */
+  flowMeter: z.boolean().nullable().default(null),
+  /** Last/current flow rate in ml/min as reported by LinkTap, even when idle. */
+  flowMlPerMin: z.number().nullable().default(null),
   lastSeenAt: z.string().nullable(),
   updatedAt: z.string(),
 });
@@ -76,6 +82,12 @@ export const gatewaySchema = z.object({
   lat: z.number().nullable(),
   lon: z.number().nullable(),
   timezone: z.string().nullable(),
+  /** Where lat/lon/timezone came from: LinkTap's location string, the user, or not set. */
+  locationSource: z.enum(['linktap', 'manual']).nullable().default(null),
+  /** The location string LinkTap reports (a Google Plus Code plus locality). */
+  linktapLocation: z.string().nullable().default(null),
+  /** Gateway firmware version string. */
+  version: z.string().nullable().default(null),
   lastSeenAt: z.string().nullable(),
   updatedAt: z.string(),
 });
@@ -113,6 +125,8 @@ export const runSchema = z.object({
   scheduleId: z.number().int().nullable(),
   status: runStatusSchema,
   note: z.string().nullable(),
+  /** LinkTap work mode the run was recorded under (history `cm`), when known. */
+  mode: z.string().nullable().default(null),
 });
 export type Run = z.infer<typeof runSchema>;
 
@@ -180,6 +194,8 @@ export const gatewayPatchSchema = z
       .refine(isValidTimeZone, 'unknown time zone')
       .nullable()
       .optional(),
+    /** Drop a manual location and go back to the one derived from LinkTap's location string. */
+    useLinktapLocation: z.literal(true).optional(),
   })
   .refine(nonEmpty, 'nothing to update');
 export const devicePatchSchema = z

@@ -52,15 +52,34 @@ export function apiRoutes({ db, linktap, poller, scheduler, mock }: ApiDeps) {
   });
 
   api.patch('/gateways/:id', async (c) => {
-    const patch = await body(c, gatewayPatchSchema);
+    const { useLinktapLocation, ...fields } = await body(c, gatewayPatchSchema);
+    const set: Partial<typeof gateways.$inferInsert> = { ...fields };
+    if (useLinktapLocation) {
+      // Forget the manual location; the poller re-derives it from LinkTap's location string.
+      Object.assign(set, {
+        lat: null,
+        lon: null,
+        timezone: null,
+        locationSource: null,
+        locationResolvedFor: null,
+      });
+    } else if (fields.lat === null && fields.lon === null) {
+      // Cleared by hand: go back to following LinkTap.
+      Object.assign(set, { locationSource: null, locationResolvedFor: null });
+    } else if (fields.lat != null || fields.lon != null || fields.timezone != null) {
+      set.locationSource = 'manual';
+    }
     const row = db
       .update(gateways)
-      .set(patch)
+      .set(set)
       .where(eq(gateways.id, c.req.param('id')))
       .returning()
       .get();
     if (!row) throw new HttpError(404, 'gateway not found');
-    return c.json(toGateway(row));
+    if (set.locationSource === null) void poller?.resolveLocations();
+    return c.json(
+      toGateway(db.select().from(gateways).where(eq(gateways.id, row.id)).get() ?? row),
+    );
   });
 
   api.get('/devices', (c) => {

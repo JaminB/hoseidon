@@ -15,6 +15,7 @@ import { cn } from '../lib/cn';
 import { formatRelative } from '../lib/format';
 import { ALARM_LABEL, isDismissable, isLinkTapPlan, WORK_MODE_LABEL } from '../lib/linktap';
 import { useDismissAlarm, useGateways } from '../lib/queries';
+import { formatFlow } from '../lib/units';
 
 export function DevicesPage() {
   const { data, isPending, isError, error } = useGateways();
@@ -116,6 +117,14 @@ function GatewayCard({
               : `Offline${gateway.lastSeenAt ? ` · seen ${formatRelative(gateway.lastSeenAt)}` : ''}`}
             <span className="text-line-strong">·</span>
             {gateway.devices.length} timer{gateway.devices.length === 1 ? '' : 's'}
+            {gateway.version && (
+              <>
+                <span className="text-line-strong">·</span>
+                <span className="truncate font-mono text-[11px]" title="Gateway firmware">
+                  {gateway.version}
+                </span>
+              </>
+            )}
           </div>
         </div>
         <Button
@@ -127,6 +136,12 @@ function GatewayCard({
           <MapPin className="size-3.5" />
           <span className="truncate">
             {hasLocation ? (gateway.timezone ?? 'Located') : 'Set location'}
+            {hasLocation && (
+              <span className="text-subtle font-normal">
+                {' · '}
+                {gateway.locationSource === 'manual' ? 'set manually' : 'from LinkTap'}
+              </span>
+            )}
           </span>
         </Button>
       </div>
@@ -281,6 +296,9 @@ function statusLine(d: Device): { text: string; className?: string }[] {
   const parts: { text: string; className?: string }[] = [];
   if (d.zone) parts.push({ text: d.zone });
   if (d.watering) parts.push({ text: 'Watering', className: 'text-accent-strong font-medium' });
+  // Only with a flow meter fitted, and only while it is actually flowing.
+  if (d.watering && d.flowMeter !== false && (d.flowMlPerMin ?? 0) > 0)
+    parts.push({ text: formatFlow(d.flowMlPerMin ?? 0) });
   if (d.workMode && isLinkTapPlan(d.workMode))
     parts.push({ text: WORK_MODE_LABEL[d.workMode], className: 'text-warn-strong font-medium' });
   if (parts.length === (d.zone ? 1 : 0)) parts.push({ text: 'Idle' });

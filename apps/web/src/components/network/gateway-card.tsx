@@ -51,6 +51,14 @@ export function GatewayCard({ gateway, from, to, weakBelow, onDiagnose }: Props)
               {gateway.online
                 ? 'Online'
                 : `Offline${gateway.lastSeenAt ? ` · seen ${formatRelative(gateway.lastSeenAt)}` : ''}`}
+              {gateway.version && (
+                <>
+                  <span className="text-line-strong">·</span>
+                  <span className="truncate font-mono text-[11px]" title="Gateway firmware">
+                    {gateway.version}
+                  </span>
+                </>
+              )}
             </div>
           </div>
           <div className="text-right">

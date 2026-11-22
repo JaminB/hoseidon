@@ -90,6 +90,8 @@ export const gatewayNetworkSchema = z.object({
   name: z.string(),
   online: z.boolean(),
   lastSeenAt: z.string().nullable(),
+  /** Gateway firmware version string. */
+  version: z.string().nullable().default(null),
   uptimePct: z.number().nullable(),
   segments: z.array(timelineSegmentSchema),
   devices: z.array(deviceNetworkSchema),

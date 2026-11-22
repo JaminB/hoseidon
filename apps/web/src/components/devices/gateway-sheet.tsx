@@ -28,7 +28,7 @@ export function GatewaySheet({
       open={gateway !== null}
       onOpenChange={(o) => !o && onClose()}
       title={gateway?.name ?? 'Gateway'}
-      description="LinkTap doesn't know where your gateway is. Set it once for rain, freeze and wind skips."
+      description="Where the gateway is, for rain, freeze and wind skips. Hoseidon reads it from LinkTap when it can."
     >
       {gateway && (
         <div className="space-y-7">
@@ -123,6 +123,11 @@ function LocationForm({ gateway, onDone }: { gateway: Gateway; onDone: () => voi
   return (
     <div className="space-y-4">
       <div className="text-[13px] font-medium">Location</div>
+      {gateway.linktapLocation && (
+        <div className="text-muted text-[12px]">
+          LinkTap reports <span className="text-fg font-medium">{gateway.linktapLocation}</span>
+        </div>
+      )}
       {gateway.lat !== null && gateway.lon !== null && (
         <div className="border-line bg-surface-2 flex items-center gap-3 rounded-lg border px-3.5 py-3">
           <MapPin className="text-accent-strong size-4 shrink-0" />
@@ -130,17 +135,26 @@ function LocationForm({ gateway, onDone }: { gateway: Gateway; onDone: () => voi
             <div className="tnum font-medium">
               {gateway.lat.toFixed(3)}, {gateway.lon.toFixed(3)}
             </div>
-            <div className="text-muted">{gateway.timezone ?? 'No time zone'}</div>
+            <div className="text-muted">
+              {gateway.timezone ?? 'No time zone'} ·{' '}
+              {gateway.locationSource === 'manual' ? 'set manually' : 'from LinkTap'}
+            </div>
           </div>
           <Button
             size="sm"
             variant="ghost"
             onClick={() => {
-              patch.mutate({ id: gateway.id, patch: { lat: null, lon: null } });
+              if (gateway.locationSource === 'manual' && gateway.linktapLocation) {
+                patch.mutate({ id: gateway.id, patch: { useLinktapLocation: true } });
+              } else {
+                patch.mutate({ id: gateway.id, patch: { lat: null, lon: null } });
+              }
               onDone();
             }}
           >
-            Clear
+            {gateway.locationSource === 'manual' && gateway.linktapLocation
+              ? 'Use LinkTap'
+              : 'Clear'}
           </Button>
         </div>
       )}
