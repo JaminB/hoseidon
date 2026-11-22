@@ -405,7 +405,15 @@ export const useAnalytics = (target: string, from: string, to: string) =>
 export const SESSION_KEY = ['auth', 'session'] as const;
 
 export const useSession = () =>
-  useQuery({ queryKey: SESSION_KEY, queryFn: api.session, staleTime: 60_000, retry: 1 });
+  useQuery({
+    queryKey: SESSION_KEY,
+    queryFn: api.session,
+    staleTime: 60_000,
+    retry: 1,
+    // The persisted cache may still say "signed out" when the page comes back from the Google
+    // sign-in redirect; always ask the server once on load (the cached answer keeps offline use).
+    refetchOnMount: 'always',
+  });
 
 export const usePasskeys = () =>
   useQuery({ queryKey: ['auth', 'passkeys'], queryFn: api.passkeys });
