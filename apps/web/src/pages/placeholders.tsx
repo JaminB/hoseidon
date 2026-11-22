@@ -1,25 +1,7 @@
-import { ChartColumn, Network } from 'lucide-react';
+import { Network } from 'lucide-react';
 import { Page, PageHeader } from '../components/layout/app-shell';
 import { Card } from '../components/ui/card';
 import { EmptyState } from '../components/ui/misc';
-
-export function AnalyticsPage() {
-  return (
-    <Page>
-      <PageHeader
-        title="Analytics"
-        description="Per-zone water use against rain and evapotranspiration."
-      />
-      <Card>
-        <EmptyState
-          icon={ChartColumn}
-          title="Analytics are on their way"
-          description="Water used vs. rainfall and ET₀, run history, flow rate, a calendar heatmap and how much water the skips saved. Hoseidon is already collecting the history."
-        />
-      </Card>
-    </Page>
-  );
-}
 
 export function NetworkPage() {
   return (

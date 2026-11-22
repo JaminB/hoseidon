@@ -34,6 +34,10 @@
   --app-danger: oklch(0.6 0.2 25);
   --app-danger-soft: oklch(0.96 0.03 25);
 
+  /* Chart series that are not status colors. Rain is a deeper blue than the aqua accent. */
+  --app-rain: oklch(0.55 0.15 262);
+  --app-et0: oklch(0.7 0.15 70);
+
   --app-shadow-color: 230 20% 20%;
   --app-ring: oklch(0.68 0.12 205 / 0.45);
 }
@@ -63,6 +67,9 @@
   --app-danger: oklch(0.7 0.17 25);
   --app-danger-soft: oklch(0.3 0.07 25);
 
+  --app-rain: oklch(0.72 0.13 262);
+  --app-et0: oklch(0.8 0.14 75);
+
   --app-shadow-color: 240 30% 2%;
   --app-ring: oklch(0.78 0.12 200 / 0.5);
 }
@@ -88,6 +95,8 @@
   --color-warn-soft: var(--app-warn-soft);
   --color-danger: var(--app-danger);
   --color-danger-soft: var(--app-danger-soft);
+  --color-rain: var(--app-rain);
+  --color-et0: var(--app-et0);
   --color-ring: var(--app-ring);
 }
 

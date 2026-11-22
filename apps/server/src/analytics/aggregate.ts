@@ -70,7 +70,8 @@ export function analyze(
         .all()
     : [];
   for (const r of runRows) {
-    if (r.status === 'skipped') continue;
+    // A run still in progress has no final duration or volume yet.
+    if (r.status === 'skipped' || r.status === 'running') continue;
     const day = days.get(localDate(r.startedAt));
     const dev = perDevice.get(r.deviceId);
     if (!day || !dev) continue;

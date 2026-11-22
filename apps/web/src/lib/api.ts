@@ -1,5 +1,7 @@
 import { z } from 'zod';
 import {
+  analyticsSchema,
+  analyticsSummarySchema,
   commandResultSchema,
   deviceSchema,
   eventSchema,
@@ -9,6 +11,7 @@ import {
   plannedRunSchema,
   previewOccurrenceSchema,
   scheduleSchema,
+  weatherResponseSchema,
   type DismissableAlarm,
   type QuickAddResult,
   type ScheduleInput,
@@ -113,6 +116,12 @@ export const api = {
     request('/planned-runs', z.array(plannedRunSchema), {
       query: { from: from.toISOString(), to: to.toISOString() },
     }),
+  weather: (gatewayId: string, from: string, to: string) =>
+    request(`/weather/${gatewayId}`, weatherResponseSchema, { query: { from, to } }),
+  deviceAnalytics: (id: string, from: string, to: string) =>
+    request(`/analytics/devices/${id}`, analyticsSchema, { query: { from, to } }),
+  analyticsSummary: (from: string, to: string) =>
+    request('/analytics/summary', analyticsSummarySchema, { query: { from, to } }),
   skipPlannedRun: (id: number, wholeOccurrence = true) =>
     request(`/planned-runs/${id}/skip`, z.array(plannedRunSchema), {
       method: 'POST',

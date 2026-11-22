@@ -253,3 +253,35 @@
   scrolling). Blocks can't be dragged to move/resize yet.
 - Quick-add creates directly when the parse is clean; ambiguous zone names need the sheet.
 - PWA icons are still SVG only; no offline data cache beyond the app shell.
+
+## Phase 4: Weather + analytics
+
+**What exists**
+
+- `server/src/weather/`: `open-meteo.ts` (`OpenMeteoProvider`, implements `WeatherProvider`),
+  `mock.ts` (offline Open-Meteo-shaped fetch, used when `LINKTAP_MOCK=true`), `dates.ts`
+  (local-date string helpers). Cache table `weather_daily` (migration 0002), keyed by lat/lon
+  rounded to 2 decimals so gateways in one yard share rows. Forecast rows refresh after 3 h;
+  days older than 7 come from the archive API and are final. A failed fetch is logged and the
+  cache is served. `outlook()` uses today's daily values; the ET₀ baseline is the mean of the
+  previous 14 days (needs 7). The scheduler engine gets this provider in `index.ts`.
+- API (`api/analytics.ts`): `GET /api/weather/:gatewayId?from&to` (local dates; `available:false`
+  until the gateway has a location), `GET /api/analytics/devices/:id?from&to`,
+  `GET /api/analytics/summary`. Aggregation is in `analytics/aggregate.ts`: days are bucketed in
+  the gateway's time zone, running runs are excluded, "saved" = weather-skipped cycles
+  (rain/freeze/wind) plus ET₀ scale-downs, converted to volume at the device's average flow.
+  Shared DTOs and `classifySkipReason` are in `packages/shared/src/analytics.ts`.
+- Web: `pages/analytics.tsx` (device picker incl. "All timers", 7d/30d/90d/1y), Recharts charts in
+  `components/analytics/charts.tsx`, custom heatmap, `components/weather-strip.tsx` on Home,
+  pure helpers in `lib/analytics.ts` (tested). Chart colors use tokens (`--app-rain`, `--app-et0`
+  added). Ranges over 120 days fold into weekly buckets. Flow chart hides without volume data.
+- `harness({ weatherFetch })` in test-utils; `createMockOpenMeteo(now)` for fixed clocks.
+
+**Known gaps**
+
+- Skip rules still only evaluate when an occurrence starts, so upcoming runs show no predicted skip.
+- Mock history is fetched one device per 10 min, so a fresh mock DB has little analytics data.
+- Weather uses today's daily values, not a rolling next-24h window. Units: liters, mm, and
+  Fahrenheit only for en-US locales.
+- Soil moisture is stored and returned by the API but not charted yet.
+- A manual skip with free text that mentions "rain" is classified as rain.

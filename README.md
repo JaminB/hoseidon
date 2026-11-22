@@ -29,10 +29,9 @@ keeps your lawn alive without a single "Oops, something went wrong" toast.
 - [ ] Network monitoring over time (uptime, signal history, battery drain, a Diagnose panel)
 - [x] A real scheduler engine: RRULE-based and DST-safe, one zone at a time per gateway,
       cycle-and-soak, skip rules, verified starts, and quick add ("every other day 6am front lawn 15m")
-- [ ] Weather-driven skips (rain, freeze, wind) and ET₀ scaling (the rules exist; the forecast
-      arrives with the weather phase)
+- [x] Weather-driven skips (rain, freeze, wind) and ET₀ scaling, from Open-Meteo
 - [ ] Google Calendar sync
-- [ ] Per-sprinkler analytics next to weather (rain, ET0, soil moisture)
+- [x] Per-sprinkler analytics next to weather: water vs rain/ET₀, run duration, flow, heatmap, skips, water saved
 - [ ] Installable PWA with push notifications for alarms and offline devices
 
 ## Stack
@@ -110,4 +109,4 @@ water. Keep `LINKTAP_MOCK=true` until you mean it.
 
 ## License
 
-[MIT](./LICENSE). Weather data (later) by [Open-Meteo](https://open-meteo.com), CC BY 4.0.
+[MIT](./LICENSE). Weather data by [Open-Meteo](https://open-meteo.com), CC BY 4.0.

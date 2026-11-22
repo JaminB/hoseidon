@@ -72,14 +72,9 @@ export function analyticsRoutes({ db, weather, timeZone }: AnalyticsApiDeps) {
     const tz = zoneOf(row.tz);
     const { from, to } = dateWindow(c, tz, { back: 29, ahead: 0 });
     const name = row.device.name ?? row.device.linktapName;
-    const { devices: _devices, ...analytics } = analyze(
-      db,
-      [{ id: row.device.id, name }],
-      from,
-      to,
-      tz,
-    );
-    return c.json(analytics satisfies Analytics);
+    const analytics: Analytics = analyze(db, [{ id: row.device.id, name }], from, to, tz);
+    // The per-device breakdown is only meaningful for the summary.
+    return c.json({ ...analytics, devices: undefined });
   });
 
   api.get('/analytics/summary', (c) => {
