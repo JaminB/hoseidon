@@ -1,4 +1,5 @@
 import { Hono, type Context } from 'hono';
+import { getConnInfo } from '@hono/node-server/conninfo';
 import { deleteCookie, getCookie, setCookie } from 'hono/cookie';
 import { z } from 'zod';
 import { loginInputSchema, type AuthSession, type Passkey } from '@hoseidon/shared';
@@ -17,7 +18,15 @@ const passkeyDto = (p: PasskeyRow): Passkey => ({
 // The WebAuthn payloads are verified by SimpleWebAuthn; here we only check they are objects.
 const webauthnBody = z.object({ challengeId: z.string().min(1), response: z.looseObject({}) });
 
-export function authRoutes({ auth, publicUrl }: { auth: AuthService; publicUrl: string }) {
+export function authRoutes({
+  auth,
+  publicUrl,
+  trustProxy = false,
+}: {
+  auth: AuthService;
+  publicUrl: string;
+  trustProxy?: boolean;
+}) {
   const api = new Hono();
   api.onError(onApiError);
   const secure = publicUrl.startsWith('https://');
@@ -31,6 +40,20 @@ export function authRoutes({ auth, publicUrl }: { auth: AuthService; publicUrl: 
       expires: s.expiresAt,
     });
 
+  /** Who is asking: the proxy-reported address when trusted, otherwise the socket's. */
+  const clientId = (c: Context): string => {
+    if (trustProxy) {
+      const fromProxy =
+        c.req.header('cf-connecting-ip') ?? c.req.header('x-forwarded-for')?.split(',')[0]?.trim();
+      if (fromProxy) return fromProxy;
+    }
+    try {
+      return getConnInfo(c).remote.address ?? 'unknown';
+    } catch {
+      return 'unknown'; // no socket (in-process tests)
+    }
+  };
+
   const session = (c: Context): AuthSession => ({
     authenticated: auth.isValid(getCookie(c, SESSION_COOKIE)),
     configured: auth.configured,
@@ -41,7 +64,7 @@ export function authRoutes({ auth, publicUrl }: { auth: AuthService; publicUrl: 
 
   api.post('/auth/login', async (c) => {
     const { password } = await body(c, loginInputSchema);
-    const result = await auth.login(password);
+    const result = await auth.login(password, clientId(c));
     if (!result.ok) {
       if (result.reason === 'unconfigured') {
         return c.json({ error: 'No admin password is set. Set ADMIN_PASSWORD and restart.' }, 503);

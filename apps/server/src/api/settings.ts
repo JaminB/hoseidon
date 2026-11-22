@@ -16,6 +16,7 @@ import { getSetting, setSetting } from '../db/kv';
 import { devices, gateways } from '../db/schema';
 import type { LinkTapClient } from '../linktap/client';
 import type { Poller } from '../poller';
+import { ingestDevices } from '../poller/ingest';
 import type { PushService } from '../push/service';
 import { body, HttpError, onApiError } from './http';
 
@@ -123,6 +124,8 @@ export function settingsRoutes({
     }
     try {
       const polled = await linktap.getAllDevices();
+      // The call used the account's 5-minute slot, so keep what it returned.
+      ingestDevices(db, polled, new Date());
       const result: LinkTapTest = {
         ok: true,
         mock,

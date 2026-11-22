@@ -170,6 +170,27 @@ function DeviceHealth({
 }) {
   const sTone = signalTone(d.signal.latest, weakBelow);
   const bTone = batteryTone(d.battery);
+  // With under two samples the charts say nothing; show one summary row instead.
+  const sparse = d.signal.series.length < 2 && d.battery.series.length < 2;
+  if (sparse) {
+    return (
+      <li className="flex items-center gap-3 px-4 py-3 md:px-5">
+        <h3 className="min-w-0 flex-1 truncate text-sm font-medium">{d.name}</h3>
+        <span className="tnum text-muted flex shrink-0 gap-3 text-xs">
+          <span className={TEXT_TONE[sTone]}>
+            {d.signal.latest === null ? 'Signal —' : `Signal ${Math.round(d.signal.latest)}%`}
+          </span>
+          <span className={TEXT_TONE[bTone]}>
+            {d.battery.latest === null ? 'Battery —' : `Battery ${Math.round(d.battery.latest)}%`}
+          </span>
+          <span className={TEXT_TONE[uptimeTone(d.uptimePct)]}>{formatUptime(d.uptimePct)} up</span>
+        </span>
+        <Button size="sm" variant="ghost" onClick={onDiagnose} aria-label={`Diagnose ${d.name}`}>
+          <Stethoscope className="size-3.5" />
+        </Button>
+      </li>
+    );
+  }
   return (
     <li className="px-4 py-3.5 md:px-5">
       <div className="flex items-center gap-2">

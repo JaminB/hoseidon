@@ -275,6 +275,9 @@ export function startRun(
     .get();
 }
 
+/** A LinkTap-reported run this recent is taken to be the one Hoseidon is recording. */
+const ADOPT_WINDOW_MS = 60_000;
+
 /**
  * Bookkeeping for a run Hoseidon just started: close any open run on the device (a new instant
  * run replaces it), mark the device watering so the status poller picks it up, open the run.
@@ -284,7 +287,14 @@ export function recordStart(
   opts: { deviceId: string; seconds: number; now: Date; scheduleId?: number | null },
 ) {
   const open = openRun(tx, opts.deviceId);
-  if (open) closeRun(tx, open, opts.now, 'stopped');
+  // LinkTap's wateringOn webhook (or a status poll) can beat us to recording our own start. That
+  // run is this one, seen early: adopt it rather than closing it and opening a second.
+  const adoptable =
+    open !== undefined &&
+    open.source !== 'hoseidon' &&
+    Math.abs(opts.now.getTime() - open.startedAt.getTime()) <= ADOPT_WINDOW_MS &&
+    (open.plannedSec === null || open.plannedSec === opts.seconds);
+  if (open && !adoptable) closeRun(tx, open, opts.now, 'stopped');
   tx.update(devices)
     .set({
       watering: {
@@ -296,6 +306,14 @@ export function recordStart(
     })
     .where(eq(devices.id, opts.deviceId))
     .run();
+  if (open && adoptable) {
+    return tx
+      .update(runs)
+      .set({ source: 'hoseidon', plannedSec: opts.seconds, scheduleId: opts.scheduleId ?? null })
+      .where(eq(runs.id, open.id))
+      .returning()
+      .get();
+  }
   return startRun(tx, {
     deviceId: opts.deviceId,
     startedAt: opts.now,

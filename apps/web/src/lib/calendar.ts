@@ -140,6 +140,29 @@ export function layoutDay<T extends Interval>(items: T[], day: Date): DayBlock<T
   return visible;
 }
 
+/**
+ * The hours a week grid should show: the earliest to the latest block across `days`, padded by an
+ * hour, at least `minSpan` hours tall. With nothing scheduled, `fallback`.
+ */
+export function visibleHourRange<T extends Interval>(
+  items: T[],
+  days: Date[],
+  fallback: [number, number] = [5, 19],
+  minSpan = 8,
+): [number, number] {
+  const laid = days.flatMap((d) => layoutDay(items, d));
+  if (!laid.length) return fallback;
+  let start = Math.max(0, Math.floor(Math.min(...laid.map((b) => b.top)) / 60) - 1);
+  let end = Math.min(24, Math.ceil(Math.max(...laid.map((b) => b.bottom)) / 60) + 1);
+  const missing = minSpan - (end - start);
+  if (missing > 0) {
+    start = Math.max(0, start - Math.floor(missing / 2));
+    end = Math.min(24, start + minSpan);
+    start = Math.max(0, end - minSpan);
+  }
+  return [start, end];
+}
+
 /** A short human reading of the RRULEs Hoseidon writes. Falls back to the raw rule. */
 export function describeRrule(rrule: string): string {
   const parts = Object.fromEntries(

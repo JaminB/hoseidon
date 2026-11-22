@@ -23,12 +23,19 @@ interface Bucket {
   inflight: Map<string, Promise<unknown>>;
 }
 
+/** Remembers when each lane last finished a call, so limits survive a restart. */
+export interface LastCallStore {
+  get(lane: string): number | undefined;
+  set(lane: string, at: number): void;
+}
+
 export class RateLimiter<B extends string = string> {
   private readonly buckets = new Map<string, Bucket>();
 
   constructor(
     private readonly specs: Record<B, BucketSpec>,
     private readonly now: () => number = Date.now,
+    private readonly store?: LastCallStore,
   ) {}
 
   /**
@@ -54,6 +61,7 @@ export class RateLimiter<B extends string = string> {
         return await fn();
       } finally {
         b.lastDoneAt = this.now();
+        this.store?.set(key(bucket, opts.scope), b.lastDoneAt);
         b.pending--;
         if (opts.coalesceKey !== undefined) b.inflight.delete(opts.coalesceKey);
       }
@@ -72,8 +80,7 @@ export class RateLimiter<B extends string = string> {
    * queued (each needs its own interval), so it's an estimate when calls are in flight.
    */
   nextAvailableAt(bucket: B, scope?: string): Date {
-    const b = this.buckets.get(key(bucket, scope));
-    if (!b) return new Date(this.now());
+    const b = this.bucket(bucket, scope);
     const base = Math.max(this.now(), b.lastDoneAt + b.spec.intervalMs);
     return new Date(base + b.pending * b.spec.intervalMs);
   }
@@ -89,7 +96,7 @@ export class RateLimiter<B extends string = string> {
     if (!b) {
       b = {
         spec: this.specs[name],
-        lastDoneAt: Number.NEGATIVE_INFINITY,
+        lastDoneAt: this.store?.get(k) ?? Number.NEGATIVE_INFINITY,
         tail: Promise.resolve(),
         pending: 0,
         inflight: new Map(),

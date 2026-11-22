@@ -105,21 +105,34 @@ export class StartVerifyError extends Error {
   }
 }
 
+/** The user pressed Stop while a start was still being verified. */
+export class StartAbortedError extends Error {
+  constructor() {
+    super('stopped before it started');
+    this.name = 'StartAbortedError';
+  }
+}
+
 /**
  * Start, check the device really is watering, and retry the start once if not (some users see
  * starts that LinkTap accepts but never run). Throws StartVerifyError, or the executor's error.
- * Returns the number of start attempts used.
+ * Returns the number of start attempts used. `shouldAbort` is checked before every start and after
+ * every failed verify, so a Stop pressed in the verify window doesn't get a retry start behind it
+ * (throws StartAbortedError).
  */
 export async function startVerified(
   executor: Executor,
   device: ExecDevice,
   seconds: number,
   onAttempt?: (attempt: number) => void,
+  shouldAbort?: () => boolean,
 ): Promise<number> {
   for (let attempt = 1; attempt <= 2; attempt++) {
+    if (shouldAbort?.()) throw new StartAbortedError();
     onAttempt?.(attempt);
     await executor.start(device, seconds);
     if (await executor.verify(device)) return attempt;
   }
+  if (shouldAbort?.()) throw new StartAbortedError();
   throw new StartVerifyError('device did not report watering after 2 start attempts', 2);
 }

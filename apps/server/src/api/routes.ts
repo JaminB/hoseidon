@@ -15,18 +15,21 @@ import type { Db } from '../db';
 import { devices, deviceSnapshots, events, gateways, runs } from '../db/schema';
 import type { LinkTapClient } from '../linktap/client';
 import type { Poller } from '../poller';
+import type { SchedulerEngine } from '../schedule/engine';
 import { ALARM_LABELS, closeRun, insertEvents, openRun, recordStart } from '../poller/ingest';
 import { toDevice, toEvent, toGateway, toRun, toSnapshot } from './dto';
 import { body, HttpError, onApiError, parseDate } from './http';
 
 export interface ApiDeps {
   db: Db;
+  /** Told when a device is stopped, so an unfinished scheduled start can't undo it. */
+  scheduler?: Pick<SchedulerEngine, 'noteStop'>;
   linktap: LinkTapClient;
   poller?: Poller;
   mock: boolean;
 }
 
-export function apiRoutes({ db, linktap, poller, mock }: ApiDeps) {
+export function apiRoutes({ db, linktap, poller, scheduler, mock }: ApiDeps) {
   const api = new Hono();
   api.onError(onApiError);
 
@@ -134,6 +137,7 @@ export function apiRoutes({ db, linktap, poller, mock }: ApiDeps) {
 
   api.post('/devices/:id/stop', async (c) => {
     const device = findDevice(c.req.param('id'));
+    scheduler?.noteStop(device.id);
     await linktap.stopWatering({ gatewayId: device.gatewayId, taplinkerId: device.id });
     const now = new Date();
     const run = db.transaction((tx) => {

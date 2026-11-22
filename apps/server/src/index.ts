@@ -1,7 +1,8 @@
 import { serve } from '@hono/node-server';
 import { createApp } from './app';
-import { loadConfig } from './config';
+import { insecureConfig, loadConfig } from './config';
 import { openDb } from './db';
+import { settingsLastCallStore } from './db/kv';
 import { linktapFromConfig } from './linktap';
 import { Poller } from './poller';
 import { SchedulerEngine } from './schedule/engine';
@@ -14,6 +15,15 @@ import { mockOpenMeteoFetch } from './weather/mock';
 import { OpenMeteoProvider } from './weather/open-meteo';
 
 const config = loadConfig();
+if (!config.LINKTAP_MOCK) {
+  const problems = insecureConfig(config);
+  if (problems.length) {
+    console.error(
+      ['Refusing to start with real taps and weak secrets:', ...problems].join('\n - '),
+    );
+    process.exit(1);
+  }
+}
 const log = (msg: string) => console.warn(msg);
 const { db } = openDb(config.DATABASE_PATH);
 // A zone saved from Settings wins over TZ; changing it takes effect on the next start.
@@ -21,7 +31,11 @@ const timeZone = resolveTimeZone(
   db,
   process.env.TZ || Intl.DateTimeFormat().resolvedOptions().timeZone,
 );
-const { client: linktap } = linktapFromConfig(config);
+// Real API only: remember call times across restarts so a crash loop can't blow the rate limits.
+const { client: linktap } = linktapFromConfig(
+  config,
+  config.LINKTAP_MOCK ? undefined : settingsLastCallStore(db),
+);
 const poller = new Poller({ db, client: linktap, timeZone, log });
 const executor = new CloudExecutor({ client: linktap });
 // Offline demo: the mock serves Open-Meteo-shaped weather so the real cache code runs too.

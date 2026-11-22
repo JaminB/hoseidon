@@ -1,4 +1,4 @@
-import { and, eq, gte, inArray, isNull, lt } from 'drizzle-orm';
+import { and, eq, gte, inArray, isNotNull, isNull, lt } from 'drizzle-orm';
 import type { PlannedRunStatus, RunStatus } from '@hoseidon/shared';
 import type { Db } from '../db';
 import {
@@ -13,7 +13,7 @@ import {
   type ScheduleRow,
 } from '../db/schema';
 import { ALARM_LABELS, closeRun, insertEvents, recordStart } from '../poller/ingest';
-import { startVerified, type Executor } from './executor';
+import { StartAbortedError, startVerified, type Executor } from './executor';
 import { expandOccurrences } from './occurrences';
 import { laneOf, planOccurrence, slotOrder } from './plan';
 import { evaluateSkipRules, NullWeatherProvider, type WeatherProvider } from './weather';
@@ -83,6 +83,9 @@ export class SchedulerEngine {
   private busy = false;
   private lastTickAt: Date | null = null;
   private lastError: string | null = null;
+  /** Counts Stop requests; a launch aborts if its device was stopped after it began. */
+  private stopSeq = 0;
+  private readonly stoppedAt = new Map<string, number>();
 
   constructor(opts: EngineOptions) {
     this.o = {
@@ -141,11 +144,40 @@ export class SchedulerEngine {
     }
   }
 
+  /** The user stopped this device: abort any start of it that is still being verified. */
+  noteStop(deviceId: string): void {
+    this.stoppedAt.set(deviceId, ++this.stopSeq);
+  }
+
   /**
    * Drop a schedule's not-yet-begun runs and plan again from now. Call after creating, editing,
-   * enabling or disabling a schedule. Occurrences already under way finish as they were planned.
+   * enabling or disabling a schedule. A zone already watering finishes. Zones of an occurrence
+   * under way that haven't started yet are cancelled when the schedule is off (or
+   * `cancelStarted`, for edits that move it), so they can't water on top of the new plan.
    */
-  rematerialize(scheduleId: number, now = new Date()): void {
+  rematerialize(
+    scheduleId: number,
+    now = new Date(),
+    opts: { cancelStarted?: boolean } = {},
+  ): void {
+    const s = this.o.db.select().from(schedules).where(eq(schedules.id, scheduleId)).get();
+    if (!s?.enabled || opts.cancelStarted) {
+      this.o.db
+        .update(plannedRuns)
+        .set({
+          status: 'skipped',
+          skipReason: s?.enabled === false ? 'Schedule turned off' : 'Schedule changed',
+          updatedAt: now,
+        })
+        .where(
+          and(
+            eq(plannedRuns.scheduleId, scheduleId),
+            eq(plannedRuns.status, 'planned'),
+            isNotNull(plannedRuns.weatherCheckedAt),
+          ),
+        )
+        .run();
+    }
     this.o.db
       .delete(plannedRuns)
       .where(
@@ -472,6 +504,10 @@ export class SchedulerEngine {
     for (const row of candidates) {
       const s = scheds.get(row.scheduleId);
       if (!s) continue;
+      if (!s.enabled) {
+        this.skip(row, 'Schedule turned off', now);
+        return this.pickNext(now, recovering);
+      }
       const group = byGroup.get(groupKey(row)) ?? [];
       const ready = readiness(row, group, s);
       if (ready.skip) {
@@ -520,9 +556,16 @@ export class SchedulerEngine {
       .get();
     if (!claimed) return;
     const ref = { id: device.id, gatewayId: device.gatewayId };
+    const seenStops = this.stopSeq;
+    const stopped = () => (this.stoppedAt.get(device.id) ?? 0) > seenStops;
     let attempts = 0;
     try {
-      attempts = await startVerified(executor, ref, row.seconds, (n) => (attempts = n));
+      attempts = await startVerified(executor, ref, row.seconds, (n) => (attempts = n), stopped);
+      if (stopped()) {
+        // Stop landed during the verify window; its command queued behind our start, so the
+        // zone is already off. Don't record a run.
+        throw new StartAbortedError();
+      }
       const startedAt = new Date();
       db.transaction((tx) => {
         const run = recordStart(tx, {
@@ -534,6 +577,17 @@ export class SchedulerEngine {
         update(tx, row.id, { runId: run.id, startedAt, attempts }, startedAt);
       });
     } catch (err) {
+      if (err instanceof StartAbortedError) {
+        this.o.db.transaction((tx) =>
+          update(
+            tx,
+            row.id,
+            { status: 'cancelled', skipReason: 'Stopped by you', attempts, endedAt: new Date() },
+            new Date(),
+          ),
+        );
+        return;
+      }
       const message = err instanceof Error ? err.message : String(err);
       const at = new Date();
       db.transaction((tx) => {

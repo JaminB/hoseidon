@@ -199,7 +199,10 @@ export function scheduleRoutes({
       .where(eq(schedules.id, current.id))
       .returning()
       .get()!;
-    if (retime) scheduler?.rematerialize(row.id, now);
+    if (retime) {
+      const moved = ['rrule', 'dtstart', 'timezone'].some((k) => k in patch);
+      scheduler?.rematerialize(row.id, now, { cancelStarted: moved });
+    }
     onChange();
     return c.json(present(row));
   });

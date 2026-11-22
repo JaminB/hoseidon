@@ -10,15 +10,17 @@ import {
 } from '@simplewebauthn/server';
 import type { Config } from '../config';
 import type { Db } from '../db';
-import { getSetting, setSetting } from '../db/kv';
+import { deleteSetting, getSetting, setSetting } from '../db/kv';
 import { passkeys, sessions } from '../db/schema';
 import { hashPassword, verifyPassword } from './password';
 
 export const SESSION_TTL_MS = 30 * 24 * 3600_000;
 const HASH_KEY = 'auth.passwordHash';
 const CHALLENGE_TTL_MS = 5 * 60_000;
-/** After this many wrong passwords in the window, logins are refused until it passes. */
+/** After this many wrong passwords from one client in the window, its logins are refused. */
 const MAX_FAILURES = 8;
+/** Safety cap across all clients, high enough that a few strangers can't lock the owner out. */
+const MAX_GLOBAL_FAILURES = 100;
 const FAILURE_WINDOW_MS = 15 * 60_000;
 const USER_ID = new TextEncoder().encode('hoseidon-admin');
 
@@ -41,7 +43,7 @@ export interface AuthOptions {
  * Sessions are random cookie tokens; only their hash is stored.
  */
 export class AuthService {
-  private failures: number[] = [];
+  private failures = new Map<string, number[]>();
   private challenges = new Map<string, { challenge: string; expires: number }>();
   private readonly now: () => number;
   private ready: Promise<void>;
@@ -60,7 +62,12 @@ export class AuthService {
     const { db, config, log } = this.o;
     const stored = getSetting(db, HASH_KEY);
     if (!config.ADMIN_PASSWORD) {
-      if (!stored) log?.('ADMIN_PASSWORD is not set: nobody can sign in until it is.');
+      if (stored) {
+        // Removing the env value revokes the password instead of leaving the old one working.
+        deleteSetting(db, HASH_KEY);
+        db.delete(sessions).run();
+      }
+      log?.('ADMIN_PASSWORD is not set: nobody can sign in until it is.');
       return;
     }
     if (stored && (await verifyPassword(config.ADMIN_PASSWORD, stored))) return;
@@ -79,21 +86,30 @@ export class AuthService {
 
   // ---- sessions -------------------------------------------------------------------------------
 
-  async login(password: string): Promise<LoginResult> {
+  /** `client` identifies who is trying (an IP); failures are counted per client. */
+  async login(password: string, client = 'unknown'): Promise<LoginResult> {
     await this.ready;
     const stored = getSetting(this.o.db, HASH_KEY);
     if (!stored) return { ok: false, reason: 'unconfigured' };
     const now = this.now();
-    this.failures = this.failures.filter((t) => now - t < FAILURE_WINDOW_MS);
-    if (this.failures.length >= MAX_FAILURES) {
-      const retryAfterSec = Math.ceil((this.failures[0]! + FAILURE_WINDOW_MS - now) / 1000);
+    for (const [k, list] of this.failures) {
+      const live = list.filter((t) => now - t < FAILURE_WINDOW_MS);
+      if (live.length) this.failures.set(k, live);
+      else this.failures.delete(k);
+    }
+    const mine = this.failures.get(client) ?? [];
+    const all = [...this.failures.values()].flat().sort((a, b) => a - b);
+    const throttledBy =
+      mine.length >= MAX_FAILURES ? mine : all.length >= MAX_GLOBAL_FAILURES ? all : null;
+    if (throttledBy) {
+      const retryAfterSec = Math.ceil((throttledBy[0]! + FAILURE_WINDOW_MS - now) / 1000);
       return { ok: false, reason: 'throttled', retryAfterSec };
     }
     if (!(await verifyPassword(password, stored))) {
-      this.failures.push(now);
+      this.failures.set(client, [...mine, now]);
       return { ok: false, reason: 'invalid' };
     }
-    this.failures = [];
+    this.failures.delete(client);
     return { ok: true, ...this.createSession() };
   }
 

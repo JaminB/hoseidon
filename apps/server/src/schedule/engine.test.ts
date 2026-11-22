@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { asc, eq } from 'drizzle-orm';
 import type { ScheduleInput } from '@hoseidon/shared';
-import { events, gateways, plannedRuns, runs } from '../db/schema';
+import { events, gateways, plannedRuns, runs, schedules } from '../db/schema';
 import { MOCK_IDS } from '../linktap/mock';
 import { harness } from '../test-utils';
 import { SchedulerEngine } from './engine';
@@ -54,6 +54,18 @@ async function tickAt(h: H, min: number) {
   await h.poller.pollRunning();
   await h.scheduler.tick();
 }
+
+const patchSchedule = (h: H, id: number, body: unknown) =>
+  h.app.request(`/api/schedules/${id}`, {
+    method: 'PATCH',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+const stopDevice = (h: H, id: string) =>
+  h.app.request(`/api/devices/${id}/stop`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+  });
 
 beforeEach(() => {
   vi.useFakeTimers({ toFake: ['Date'] });
@@ -165,6 +177,85 @@ describe('SchedulerEngine', () => {
     await tickAt(h, 0);
     expect(planned(h)[0]).toMatchObject({ status: 'running', attempts: 2 });
     expect(startCalls(h)).toHaveLength(2);
+  });
+
+  it('stops the rest of an occurrence when the schedule is turned off', async () => {
+    const h = await setup();
+    const { id } = await createSchedule(h, {
+      items: [
+        { deviceId: MOCK_IDS.frontLawn, seconds: 600 },
+        { deviceId: MOCK_IDS.dripA, seconds: 300 },
+      ],
+    });
+    await tickAt(h, 0);
+    expect(statuses(h)).toEqual(['0011#1:running', '13_1#1:planned']);
+    // Zone 1 has passed its weather check and zone 2 is queued behind it.
+    expect((await patchSchedule(h, id, { enabled: false })).status).toBe(200);
+    expect((await stopDevice(h, MOCK_IDS.frontLawn)).status).toBe(200);
+    await tickAt(h, 1);
+    expect(startCalls(h)).toHaveLength(1);
+    expect(planned(h)[1]).toMatchObject({ status: 'skipped', skipReason: 'Schedule turned off' });
+  });
+
+  it('does not start a queued zone of a schedule disabled behind the API', async () => {
+    const h = await setup();
+    const { id } = await createSchedule(h, {
+      items: [
+        { deviceId: MOCK_IDS.frontLawn, seconds: 600 },
+        { deviceId: MOCK_IDS.dripA, seconds: 300 },
+      ],
+    });
+    await tickAt(h, 0);
+    h.db.update(schedules).set({ enabled: false }).where(eq(schedules.id, id)).run();
+    await stopDevice(h, MOCK_IDS.frontLawn);
+    await tickAt(h, 1);
+    expect(startCalls(h)).toHaveLength(1);
+  });
+
+  it('does not water twice when a running schedule is moved', async () => {
+    const h = await setup();
+    const { id } = await createSchedule(h, {
+      items: [
+        { deviceId: MOCK_IDS.frontLawn, seconds: 600 },
+        { deviceId: MOCK_IDS.dripA, seconds: 300 },
+      ],
+    });
+    await tickAt(h, 0);
+    await patchSchedule(h, id, { dtstart: '2026-06-10T18:00' });
+    await stopDevice(h, MOCK_IDS.frontLawn);
+    await tickAt(h, 1);
+    expect(startCalls(h)).toHaveLength(1);
+    expect(planned(h)[1]).toMatchObject({ status: 'skipped', skipReason: 'Schedule changed' });
+  });
+
+  it('honours Stop pressed while a start is still being verified', async () => {
+    const h = await setup();
+    await createSchedule(h);
+    h.mock.failStartsSilently(MOCK_IDS.frontLawn, 1);
+    vi.spyOn(h.executor, 'verify').mockImplementationOnce(async (d) => {
+      h.scheduler.noteStop(d.id); // the Stop button, mid-verify
+      return false;
+    });
+    await tickAt(h, 0);
+    // No retry start behind the Stop, and the zone isn't left watering.
+    expect(startCalls(h)).toHaveLength(1);
+    expect(planned(h)[0]).toMatchObject({ status: 'cancelled', skipReason: 'Stopped by you' });
+    expect(h.mock.find(MOCK_IDS.frontLawn)?.run ?? null).toBeNull();
+    expect(h.db.select().from(runs).all()).toHaveLength(0);
+  });
+
+  it('records no run when Stop lands after the start was verified', async () => {
+    const h = await setup();
+    await createSchedule(h);
+    const verify = h.executor.verify.bind(h.executor);
+    vi.spyOn(h.executor, 'verify').mockImplementationOnce(async (d) => {
+      const ok = await verify(d);
+      h.scheduler.noteStop(d.id);
+      return ok;
+    });
+    await tickAt(h, 0);
+    expect(planned(h)[0]).toMatchObject({ status: 'cancelled' });
+    expect(h.db.select().from(runs).all()).toHaveLength(0);
   });
 
   it('skips devices that are offline or have a blocking alarm', async () => {
