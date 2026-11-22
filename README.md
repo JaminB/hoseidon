@@ -35,7 +35,8 @@ keeps your lawn alive without a single "Oops, something went wrong" toast.
       greyed out with the reason, and (optionally) finished runs logged as past events
 - [x] Per-sprinkler analytics next to weather: water vs rain/ET₀, run duration, flow, heatmap, skips, water saved
 - [x] Installable PWA (offline shell, last-known data) with push notifications for alarms, offline devices and failed or skipped runs
-- [x] Password login (plus optional passkeys), CSRF-protected API
+- [x] Sign in with Google for invited accounts (admin-managed allowlist), or a single admin
+      password when Google isn't set up; optional passkeys; CSRF-protected API
 - [x] Runs on the Cloudflare Workers Free plan (one Worker, one SQLite Durable Object), or in Docker
 
 ## Stack
@@ -78,7 +79,8 @@ pnpm install
 pnpm build                                   # web app + `wrangler deploy --dry-run` bundle
 cd apps/worker
 pnpm exec wrangler login
-# Secrets (never in wrangler.jsonc). ADMIN_PASSWORD: 20+ random chars, e.g. openssl rand -base64 18
+# Secrets (never in wrangler.jsonc). Either Google sign-in (GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET,
+# ADMIN_EMAIL; see docs/deploy.md) or ADMIN_PASSWORD: 20+ random chars, e.g. openssl rand -base64 18
 pnpm exec wrangler secret put ADMIN_PASSWORD
 pnpm exec wrangler secret put SESSION_SECRET    # openssl rand -hex 32
 pnpm exec wrangler secret put WEBHOOK_SECRET
@@ -124,14 +126,33 @@ Then open <http://localhost:8787>. Data lives in the `hoseidon-data` volume (SQL
 See [`.env.example`](./.env.example) (Node) or `apps/worker/wrangler.jsonc` and
 `apps/worker/.dev.vars.example` (Cloudflare: vars and secrets with the same names). Highlights:
 
-| Variable                                    | What it does                                                                                                                                                                 |
-| ------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `LINKTAP_USERNAME` / `LINKTAP_API_KEY`      | Your LinkTap cloud credentials (link-tap.com, API section)                                                                                                                   |
-| `LINKTAP_MOCK`                              | `true` uses a fake LinkTap server. Set `false` for real hardware                                                                                                             |
-| `ADMIN_PASSWORD` / `SESSION_SECRET`         | The admin password (hashed with scrypt on Node, PBKDF2 on Workers; changing it signs everyone out) and a long random string. `SESSION_SECRET` also encrypts the Google token |
-| `PUBLIC_URL` / `WEBHOOK_SECRET`             | Where LinkTap webhooks and Google OAuth call back                                                                                                                            |
-| `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` | Optional Google Calendar sync                                                                                                                                                |
-| `ENGINE_ENABLED` / `TZ`                     | Cloudflare only: allow the poller and scheduler with real taps (off until `true`), and the default time zone                                                                 |
+| Variable                                    | What it does                                                                                                                                                                                    |
+| ------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `LINKTAP_USERNAME` / `LINKTAP_API_KEY`      | Your LinkTap cloud credentials (link-tap.com, API section)                                                                                                                                      |
+| `LINKTAP_MOCK`                              | `true` uses a fake LinkTap server. Set `false` for real hardware                                                                                                                                |
+| `ADMIN_PASSWORD` / `SESSION_SECRET`         | The admin password (hashed with scrypt on Node, PBKDF2 on Workers; changing it signs everyone out) and a long random string. `SESSION_SECRET` also encrypts the Google token                    |
+| `PUBLIC_URL` / `WEBHOOK_SECRET`             | Where LinkTap webhooks and Google OAuth call back                                                                                                                                               |
+| `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` | Optional Google sign-in (with `ADMIN_EMAIL`) and Google Calendar sync                                                                                                                           |
+| `ADMIN_EMAIL`                               | Google sign-in: comma-separated Google accounts that are always admins. With `GOOGLE_CLIENT_ID`/`SECRET` it turns Google sign-in on and password sign-in off (`ADMIN_PASSWORD` is then ignored) |
+| `ENGINE_ENABLED` / `TZ`                     | Cloudflare only: allow the poller and scheduler with real taps (off until `true`), and the default time zone                                                                                    |
+
+### Signing in
+
+Two modes, picked by configuration:
+
+- **Google sign-in** (`GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` and `ADMIN_EMAIL` all set): the
+  login page shows "Sign in with Google" (OpenID Connect with PKCE; the ID token's signature,
+  issuer, audience, expiry, nonce and verified email are all checked). Only invited email
+  addresses get in. The `ADMIN_EMAIL` accounts are always admins; an admin invites others
+  (member or admin) and can remove or disable them, which signs them out at once. Password
+  sign-in is off in this mode. Add `${PUBLIC_URL}/api/auth/google/callback` as an authorised
+  redirect URI of the OAuth client (next to the Calendar one below); setup steps for Workers are
+  in [docs/deploy.md](docs/deploy.md#6-google-sign-in-and-google-calendar).
+- **Admin password** (otherwise, e.g. local dev and the mock): one admin signs in with
+  `ADMIN_PASSWORD`.
+
+In both modes a signed-in user can add a passkey for faster sign-in next time; it belongs to that
+user and stops working if they are removed.
 
 ### Google Calendar sync
 

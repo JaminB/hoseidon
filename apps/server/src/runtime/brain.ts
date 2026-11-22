@@ -36,6 +36,8 @@ export interface BrainOptions {
   now?: () => number;
   /** Tests: replace the LinkTap client (mock with no limits, spies). */
   linktap?: LinkTapClient;
+  /** Tests: fetch for Google sign-in (token + JWKS endpoints). */
+  authFetch?: typeof fetch;
 }
 
 /** Where a PUBLIC_URL derived from the first request is remembered. */
@@ -114,7 +116,10 @@ export class BrainCore {
       ? []
       : [
           ...(missingTap ? ['LINKTAP_USERNAME and LINKTAP_API_KEY are not set'] : []),
-          ...insecureConfig(this.config, { minAdminPassword: WORKER_MIN_ADMIN_PASSWORD }),
+          ...insecureConfig(this.config, {
+            minAdminPassword: WORKER_MIN_ADMIN_PASSWORD,
+            requireSignIn: true,
+          }),
         ];
     if (this.problems.length) {
       this.log(
@@ -137,6 +142,7 @@ export class BrainCore {
       // Missing credentials degrade to the 503 below instead of crashing the object.
       linktap: o.linktap ?? (missingTap ? noLinkTap() : undefined),
       signTokens: true,
+      authFetch: o.authFetch,
     });
     this.wheel = wheel = new Wheel({
       db: this.db,
@@ -210,6 +216,7 @@ export class BrainCore {
       log,
       passwordScheme: 'pbkdf2',
       signTokens: true,
+      fetch: this.o.authFetch,
     });
     this.services.gcal = new GcalService({
       db,

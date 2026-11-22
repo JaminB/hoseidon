@@ -1,11 +1,9 @@
 import { createDecipheriv, createECDH, hkdfSync } from 'node:crypto';
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { createServer, type IncomingHttpHeaders, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
-import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createTestHarness } from 'wrangler';
+import { testConfig, workerDir } from './config';
 
 /**
  * Smoke test of the real Worker + Brain Durable Object in local workerd (wrangler's test
@@ -14,43 +12,14 @@ import { createTestHarness } from 'wrangler';
  * the first poll itself (memoized), so any test can run on its own.
  */
 
-const here = dirname(fileURLToPath(import.meta.url));
-const workerDir = join(here, '..');
 const PASSWORD = 'smoke-test-password-0123456789';
 const CSRF = { 'x-hoseidon-csrf': '1' };
-
-/**
- * wrangler.jsonc with the static assets pointed at a tiny fixture, so the test doesn't need the
- * web app built first. Everything else (DO binding, SQLite migration, cron, flags) is the real
- * config.
- */
-function testConfig(): string {
-  const raw = readFileSync(join(workerDir, 'wrangler.jsonc'), 'utf8')
-    .replace(/^\s*\/\/.*$/gm, '')
-    .replace(/,(\s*[}\]])/g, '$1');
-  const config = JSON.parse(raw) as Record<string, unknown> & { assets: Record<string, unknown> };
-  const dir = join(workerDir, '.wrangler', 'smoke');
-  const assets = join(dir, 'assets');
-  mkdirSync(assets, { recursive: true });
-  writeFileSync(join(assets, 'index.html'), '<!doctype html><title>Hoseidon</title><div id=root>');
-  const path = join(dir, 'wrangler.json');
-  delete config.$schema;
-  writeFileSync(
-    path,
-    JSON.stringify({
-      ...config,
-      main: join(workerDir, 'src/index.ts'),
-      assets: { ...config.assets, directory: assets },
-    }),
-  );
-  return path;
-}
 
 const server = createTestHarness({
   root: workerDir,
   workers: [
     {
-      configPath: testConfig(),
+      configPath: testConfig('smoke'),
       vars: { LINKTAP_MOCK: 'true', TZ: 'UTC' },
       secrets: {
         ADMIN_PASSWORD: PASSWORD,

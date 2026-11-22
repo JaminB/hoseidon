@@ -4,6 +4,7 @@ import { Fingerprint, LogOut, Trash2 } from 'lucide-react';
 import { api } from '../../lib/api';
 import { formatRelative } from '../../lib/format';
 import { SESSION_KEY, usePasskeys } from '../../lib/queries';
+import { UserChip } from './user-chip';
 import { Button } from '../ui/button';
 import { Card, CardHeader } from '../ui/card';
 import { toast } from '../ui/toast';
@@ -65,8 +66,9 @@ export function SecurityCard() {
     <Card data-testid="security-card">
       <CardHeader
         title="Security"
-        description="Sign in with your password, or add a passkey to use Face ID, Touch ID or a security key."
+        description="Add a passkey to sign in with Face ID, Touch ID or a security key."
       />
+      <UserChip />
       <ul className="divide-line border-line divide-y border-t">
         {passkeys.data?.map((p) => (
           <li key={p.id} className="flex items-center justify-between gap-3 px-5 py-3 text-sm">

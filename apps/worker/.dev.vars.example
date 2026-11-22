@@ -15,3 +15,7 @@ LINKTAP_API_KEY=
 # Optional Google Calendar sync. GOOGLE_CLIENT_ID can be a plain var in wrangler.jsonc.
 GOOGLE_CLIENT_ID=
 GOOGLE_CLIENT_SECRET=
+# Google sign-in: with the two above, these Google accounts are always admins, and password
+# sign-in (ADMIN_PASSWORD) is turned off. Comma-separated. Redirect URI to add in Google Cloud:
+# http://localhost:8799/api/auth/google/callback
+ADMIN_EMAIL=

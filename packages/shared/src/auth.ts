@@ -1,14 +1,80 @@
 import { z } from 'zod';
 
-/** What the login page needs to know, and whether this browser is signed in. */
+export const USER_ROLES = ['admin', 'member'] as const;
+export const userRoleSchema = z.enum(USER_ROLES);
+export type UserRole = z.infer<typeof userRoleSchema>;
+
+/** What the login page needs to know, and whether (and as whom) this browser is signed in. */
 export const authSessionSchema = z.object({
   authenticated: z.boolean(),
-  /** False until ADMIN_PASSWORD is set, so nobody can sign in yet. */
+  /** False while no way to sign in is set up (no Google sign-in and no ADMIN_PASSWORD). */
   configured: z.boolean(),
   /** A passkey is registered, so the login page can offer it. */
   passkeys: z.boolean(),
+  /** "Sign in with Google" is available: navigate to GOOGLE_SIGNIN_START. */
+  google: z.boolean().default(false),
+  /** Password sign-in is available (only while Google sign-in is not configured). */
+  password: z.boolean().default(true),
+  /** The signed-in user. All null when signed out; email is null for the password admin. */
+  email: z.string().nullable().default(null),
+  name: z.string().nullable().default(null),
+  picture: z.string().nullable().default(null),
+  role: userRoleSchema.nullable().default(null),
 });
 export type AuthSession = z.infer<typeof authSessionSchema>;
+
+/** Browser navigation (not fetch) that starts Google sign-in; `?next=/path` returns there. */
+export const GOOGLE_SIGNIN_START = '/api/auth/google/start';
+
+/**
+ * After a failed Google sign-in the server redirects to `/?signin=<reason>`.
+ * Success redirects to `next` (default `/`) with no query.
+ */
+export const SIGNIN_ERRORS = [
+  'not_invited',
+  'cancelled',
+  'expired',
+  'failed',
+  'not_configured',
+] as const;
+export const signinErrorSchema = z.enum(SIGNIN_ERRORS);
+export type SigninError = z.infer<typeof signinErrorSchema>;
+export const SIGNIN_ERROR_MESSAGE: Record<SigninError, string> = {
+  not_invited:
+    "That Google account isn't invited to this Hoseidon. Ask the admin to add your email address.",
+  cancelled: 'Google sign-in was cancelled.',
+  expired: 'The sign-in took too long or was already used. Please try again.',
+  failed: 'Google sign-in failed. Please try again.',
+  not_configured: 'Google sign-in is not set up on this server.',
+};
+
+/** An allowlisted account (admin API). */
+export const userSchema = z.object({
+  email: z.string(),
+  role: userRoleSchema,
+  name: z.string().nullable(),
+  picture: z.string().nullable(),
+  addedBy: z.string().nullable(),
+  createdAt: z.iso.datetime(),
+  lastLoginAt: z.iso.datetime().nullable(),
+  disabled: z.boolean(),
+  /** Listed in ADMIN_EMAIL: always an admin, can't be removed, demoted or disabled. */
+  protected: z.boolean(),
+});
+export type User = z.infer<typeof userSchema>;
+
+export const userInputSchema = z.object({
+  /** Trimmed and lowercased before it is checked. */
+  email: z.string().trim().toLowerCase().pipe(z.email().max(254)),
+  role: userRoleSchema.default('member'),
+});
+export type UserInput = z.input<typeof userInputSchema>;
+
+export const userPatchSchema = z
+  .object({ role: userRoleSchema, disabled: z.boolean() })
+  .partial()
+  .refine((p) => p.role !== undefined || p.disabled !== undefined, 'nothing to change');
+export type UserPatch = z.infer<typeof userPatchSchema>;
 
 export const loginInputSchema = z.object({ password: z.string().min(1).max(512) });
 

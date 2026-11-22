@@ -35,6 +35,8 @@ export interface ServiceOptions {
   scheduleReconcile?: (deviceId: string, at: Date) => void;
   /** Replaces the LinkTap mock / real client (tests). */
   linktap?: LinkTapClient;
+  /** fetch for Google sign-in (token + JWKS); tests inject a fake. */
+  authFetch?: typeof fetch;
 }
 
 export interface Services {
@@ -93,6 +95,7 @@ export function createServices(o: ServiceOptions): Services {
     log,
     passwordScheme: o.passwordScheme,
     signTokens: o.signTokens,
+    fetch: o.authFetch,
   });
   const push = new PushService({ db, config, log });
   return {

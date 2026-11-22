@@ -10,6 +10,12 @@ const envSchema = z.object({
   LINKTAP_API_KEY: z.string().default(''),
   SESSION_SECRET: z.string().default(''),
   ADMIN_PASSWORD: z.string().default(''),
+  /**
+   * Comma-separated Google account emails that are always admins (and can't be removed). With
+   * GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET set it turns on Google sign-in and turns password
+   * sign-in off.
+   */
+  ADMIN_EMAIL: z.string().default(''),
   GOOGLE_CLIENT_ID: z.string().default(''),
   GOOGLE_CLIENT_SECRET: z.string().default(''),
   PUBLIC_URL: z.string().default('http://localhost:8787'),
@@ -29,6 +35,24 @@ const envSchema = z.object({
 
 export type Config = z.infer<typeof envSchema>;
 
+/** Trim + lowercase, the one form emails are stored and compared in. */
+export const normalizeEmail = (email: string) => email.trim().toLowerCase();
+
+/** ADMIN_EMAIL as a list of normalized addresses (anything without an "@" is ignored). */
+export function adminEmails(config: Pick<Config, 'ADMIN_EMAIL'>): string[] {
+  const list = config.ADMIN_EMAIL.split(',').map(normalizeEmail);
+  return [...new Set(list.filter((e) => /^[^\s@]+@[^\s@]+$/.test(e)))];
+}
+
+/** Google sign-in is on (and password sign-in off) when the client and an admin are configured. */
+export function googleSignInConfigured(
+  config: Pick<Config, 'GOOGLE_CLIENT_ID' | 'GOOGLE_CLIENT_SECRET' | 'ADMIN_EMAIL'>,
+): boolean {
+  return (
+    !!config.GOOGLE_CLIENT_ID && !!config.GOOGLE_CLIENT_SECRET && adminEmails(config).length > 0
+  );
+}
+
 /** Values copied from .env.example, which must never protect a real deployment. */
 const PLACEHOLDERS = new Set(['change-me', 'change-me-too', 'change-me-to-a-long-random-string']);
 
@@ -38,15 +62,26 @@ const PLACEHOLDERS = new Set(['change-me', 'change-me-too', 'change-me-to-a-long
  */
 export function insecureConfig(
   config: Config,
-  /** Workers hash with fast PBKDF2, so the password itself must be long and random there. */
-  opts: { minAdminPassword?: number } = {},
+  opts: {
+    /** Workers hash with fast PBKDF2, so the password itself must be long and random there. */
+    minAdminPassword?: number;
+    /** Some way to sign in must be set up: Google sign-in, or ADMIN_PASSWORD (Workers). */
+    requireSignIn?: boolean;
+  } = {},
 ): string[] {
+  const google = googleSignInConfigured(config);
   const check = (name: string, value: string, min: number) =>
     value && (PLACEHOLDERS.has(value) || value.length < min)
       ? [`${name} is a placeholder or shorter than ${min} characters`]
       : [];
   return [
-    ...check('ADMIN_PASSWORD', config.ADMIN_PASSWORD, opts.minAdminPassword ?? 12),
+    // With Google sign-in on, ADMIN_PASSWORD is ignored, so its strength doesn't matter.
+    ...(google ? [] : check('ADMIN_PASSWORD', config.ADMIN_PASSWORD, opts.minAdminPassword ?? 12)),
+    ...(opts.requireSignIn && !google && !config.ADMIN_PASSWORD
+      ? [
+          'no sign-in is set up: set GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET and ADMIN_EMAIL (Google sign-in) or ADMIN_PASSWORD',
+        ]
+      : []),
     ...check('WEBHOOK_SECRET', config.WEBHOOK_SECRET, 16),
     ...check('SESSION_SECRET', config.SESSION_SECRET, 16),
   ];

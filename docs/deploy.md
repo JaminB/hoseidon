@@ -34,12 +34,19 @@ openssl rand -base64 18 | gh secret set ADMIN_PASSWORD  --env production   # 20+
 openssl rand -hex 32    | gh secret set SESSION_SECRET  --env production
 openssl rand -hex 16    | gh secret set WEBHOOK_SECRET  --env production
 
-# Only when switching to real taps (see section 7) and Google Calendar:
-gh secret set LINKTAP_USERNAME --env production
-gh secret set LINKTAP_API_KEY  --env production
+# Google sign-in and Calendar (section 6):
 gh secret set GOOGLE_CLIENT_ID --env production
 gh secret set GOOGLE_CLIENT_SECRET --env production
+gh secret set ADMIN_EMAIL --env production   # your Google account's address; comma-separated for more
+
+# Only when switching to real taps (see section 7):
+gh secret set LINKTAP_USERNAME --env production
+gh secret set LINKTAP_API_KEY  --env production
 ```
+
+With GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET and ADMIN_EMAIL all set, Hoseidon uses **Sign in with
+Google** and password sign-in is off (ADMIN_PASSWORD is ignored and no longer required). Without
+them it keeps the ADMIN_PASSWORD login. With real taps, one of the two must be set up.
 
 Only non-empty secrets are pushed (`wrangler secret bulk`), so an unset one never blanks a value
 already stored in Cloudflare. Each push makes a new Worker version (restarting the Durable Object),
@@ -66,7 +73,8 @@ Merge to `main` (or re-run the CI workflow on main). The `deploy` job builds the
 `wrangler deploy` (creating the Worker, the `Brain` Durable Object and the cron trigger), pushes
 secrets, then curls `/api/health` up to 10 times. The URL is printed in the log
 (`https://hoseidon.<subdomain>.workers.dev`); set it as `CLOUDFLARE_WORKER_URL` to make the smoke
-check independent of log parsing. Open it and log in as the admin with ADMIN_PASSWORD.
+check independent of log parsing. Open it and sign in: with Google (as an ADMIN_EMAIL account)
+when it is configured, otherwise with ADMIN_PASSWORD.
 
 You can also deploy by hand: `CLOUDFLARE_API_TOKEN=... corepack pnpm build &&
 corepack pnpm --filter @hoseidon/worker exec wrangler deploy`.
@@ -81,13 +89,30 @@ https://<worker>.workers.dev/hooks/linktap/<WEBHOOK_SECRET>
 
 The secret is in the path, which is why invocation logs are disabled in `wrangler.jsonc`.
 
-## 6. Google Calendar (optional)
+## 6. Google sign-in and Google Calendar
 
-In Google Cloud Console > Credentials > your OAuth client, add the authorised redirect URI
-`https://<worker>.workers.dev/api/gcal/callback`,
-and set GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET. If you later move to a custom domain,
-set `PUBLIC_URL` and update the redirect URI. Passkeys are bound to the hostname: register them
-again after any hostname change.
+One OAuth client serves both. In Google Cloud Console > APIs & Services:
+
+1. OAuth consent screen: app name, your email as support contact, scopes `openid`, `email`,
+   `profile` (sign-in) and `calendar.app.created` (Calendar, optional). While the app is in
+   **Testing**, add every Google account that should sign in as a test user (or publish it).
+2. Credentials > Create credentials > OAuth client ID > Web application. Authorised redirect
+   URIs (both, exactly):
+   - `https://<worker>.workers.dev/api/auth/google/callback` (sign-in)
+   - `https://<worker>.workers.dev/api/gcal/callback` (Calendar)
+3. Set the GitHub secrets GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET and ADMIN_EMAIL (your own
+   Google account's address) and re-run the deploy (manually with `push_secrets` if Cloudflare
+   already has some of them).
+
+Then sign in with Google. ADMIN_EMAIL accounts are always admins: they can't be removed or demoted
+from the app. An admin invites others by email (member or admin); only invited addresses can
+sign in, everyone else sees a "not invited" message and gets no session. Removing or disabling
+someone signs them out everywhere and deletes their passkeys. Turning Google sign-in on ends the
+old password session and retires passkeys registered with it: sign in with Google and add a
+passkey again.
+
+If you later move to a custom domain, set `PUBLIC_URL` and update both redirect URIs. Passkeys
+are bound to the hostname: register them again after any hostname change.
 
 ## 7. Going live with real taps
 

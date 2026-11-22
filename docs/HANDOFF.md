@@ -648,3 +648,69 @@ Fixes from the review of phases B and C.
   added. The `production` environment is restricted to the `main` branch (repo setting).
 - Tests: edge.test.ts (secret, cookie, limiter), token.test.ts, gcal/timeout.test.ts, brain.test.ts
   (503 health, missing creds, signed tokens, KDF skip).
+
+## Google sign-in (branch feat/google-signin)
+
+**What exists**
+
+- Mode switch: `googleSignInConfigured(config)` (config.ts) = `GOOGLE_CLIENT_ID` +
+  `GOOGLE_CLIENT_SECRET` + at least one valid `ADMIN_EMAIL` (comma-separated, trimmed,
+  lowercased by `adminEmails()`). On: Google only, `POST /api/auth/login` answers 410, the
+  stored password hash is deleted and password-admin sessions (`user_email` null) are ended.
+  Off: the password admin exactly as before (dev, mock, e2e, the Node default).
+- `auth/google.ts`: `signinUrl` (scope `openid email profile`, state, nonce, PKCE S256,
+  `prompt=select_account`), `exchangeSigninCode`, `Jwks` (WebCrypto RSASSA-PKCS1-v1_5 keys,
+  cached per Cache-Control max-age (capped at 24 h, default 1 h), refetched on an unknown kid,
+  in memory only) and `verifyIdToken` (RS256 only; iss in {https://accounts.google.com,
+  accounts.google.com}; aud contains the client id and azp must match when present or aud is a
+  list; exp/iat with 60 s skew; nonce; `email_verified === true`). All fetches use
+  `AbortSignal.timeout(15 s)`. No node-only crypto in the JWT path.
+- `AuthService` (auth/service.ts): `startGoogle(next)` stores `gsignin:<state>` = {verifier,
+  nonce, next} in `ephemeral` (10 min, single use via `takeEphemeral`); `finishGoogle` requires
+  the `hoseidon_signin` cookie (httpOnly, Lax, path `/api/auth/google`) to equal `state`
+  (login-CSRF binding), exchanges the code, verifies the token, and only creates a session for an
+  email in `users` that is not disabled (refreshes name/picture/lastLoginAt). `ensureAdmins()`
+  upserts every ADMIN_EMAIL as an enabled admin on every construct. `sessionUser(token)` reads the
+  user fresh on every request, so removal/demotion/disable is immediate. User CRUD:
+  `listUsers/addUser/updateUser/removeUser` (`UserError` 403/404/409); ADMIN_EMAIL rows can't be
+  removed, demoted or disabled. Removing or disabling deletes that user's sessions and passkeys in
+  one transaction.
+- Passkeys are per user (`passkeys.user_email`; null = the password admin). Registration needs a
+  session and the challenge is bound to the requesting user (`regchallenge:` ephemeral). A
+  passkey login is refused when its owner is gone/disabled, or when it is a password-admin
+  passkey and Google sign-in is on.
+- DB: migration `0007_users` (`users` table; `sessions.user_email` + index; `passkeys.user_email`).
+  No FKs (deletes are explicit). `migrations.gen.ts` regenerated.
+- API (`api/auth.ts`): `GET /api/auth/google/start?next=/path` and `GET /api/auth/google/callback`
+  (public, both redirects; failure goes to `${PUBLIC_URL}/?signin=<not_invited|cancelled|expired|failed|not_configured>`),
+  `GET|POST /api/admin/users`, `PATCH|DELETE /api/admin/users/:email` (admin only; CSRF header on
+  changes). `GET /api/auth/session` gained `google`, `password`, `email`, `name`, `picture`,
+  `role`. Passkey management routes now act on the caller's own passkeys only.
+- Shared (`packages/shared/src/auth.ts`): `userRoleSchema`, `userSchema`, `userInputSchema`,
+  `userPatchSchema`, `SIGNIN_ERRORS` + `SIGNIN_ERROR_MESSAGE`, `GOOGLE_SIGNIN_START`; new session
+  fields have defaults, so the current web client keeps parsing.
+- Workers: the two Google routes are in `PUBLIC` (auth/guard.ts), so the edge lets them through
+  without a cookie and rate limits them with `AUTH_LIMITER`; `/api/admin/*` needs the signed
+  cookie like every private route. `BrainCore` problems: with real taps, no sign-in at all
+  (neither Google nor ADMIN_PASSWORD) is a problem, and ADMIN_PASSWORD strength is not checked
+  when Google sign-in is on. CI pushes `ADMIN_EMAIL` with the other secrets.
+- Tests: `auth/google.test.ts` with `auth/fake-oidc.ts` (local RSA key, fake token + JWKS
+  endpoints, PKCE checked), brain.test (Google sign-in through BrainCore, problems), config.test,
+  worker `edge.test.ts` and `google.test.ts` (workerd: start redirect, callback refusal, 410,
+  admin API 401 at the edge). `harness({ authFetch })` and `BrainOptions.authFetch` inject fetch.
+
+**Conventions**
+
+- Emails are always stored and compared normalized (`normalizeEmail`). Never log a refused email.
+- Real email addresses never go in the repo: ADMIN_EMAIL is a secret; tests use example.com.
+
+**Known gaps**
+
+- No web UI yet: login page button, `?signin=` message, admin users card, per-user passkeys and
+  the avatar/sign-out need the follow-up web change.
+- Never run against real Google. The workerd smoke test does not exercise the RS256 verify (it
+  can't reach a fake JWKS); the verify path is covered on Node only.
+- JWKS cache is in memory: a DO eviction means one extra JWKS fetch on the next sign-in.
+- An address removed from ADMIN_EMAIL stays in `users` as an ordinary admin until an admin
+  removes it.
+- Members can do everything in the app except manage users (there are no finer roles).

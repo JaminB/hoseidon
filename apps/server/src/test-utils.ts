@@ -43,6 +43,8 @@ export function harness(
     pushSend?: PushSender;
     /** fetch used to geocode LinkTap's gateway location; default finds nothing. */
     geocode?: typeof fetch;
+    /** fetch for Google sign-in (token + JWKS endpoints). */
+    authFetch?: typeof fetch;
   } = {},
 ) {
   const { db, sqlite } = openDb(':memory:');
@@ -73,7 +75,7 @@ export function harness(
   const weather = new OpenMeteoProvider({ db, fetch: opts.weatherFetch ?? mockOpenMeteoFetch });
   const scheduler = new SchedulerEngine({ db, executor, ...opts.engine });
   const gcal = new GcalService({ db, config, timeZone: 'UTC', executor, ...opts.gcal });
-  const auth = new AuthService({ db, config });
+  const auth = new AuthService({ db, config, fetch: opts.authFetch });
   const push = new PushService({ db, config, send: opts.pushSend ?? (() => Promise.resolve()) });
   const app = createApp({
     config,

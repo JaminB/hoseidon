@@ -1,6 +1,7 @@
 import { Monitor, Moon, Sun } from 'lucide-react';
 import { useEffect, useRef } from 'react';
 import { useSearchParams } from 'react-router';
+import { AccessCard } from '../components/settings/access-card';
 import { GcalCard } from '../components/gcal-card';
 import { ThresholdCard } from '../components/network/threshold-card';
 import { LinktapCard } from '../components/settings/linktap-card';
@@ -74,6 +75,8 @@ export function SettingsPage() {
         <GcalCard />
 
         <SecurityCard />
+
+        <AccessCard />
 
         <Card>
           <CardHeader title="About" />
