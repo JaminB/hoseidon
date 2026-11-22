@@ -59,8 +59,14 @@ export const WHEEL = {
 export interface WheelOptions {
   db: Db;
   services: Pick<Services, 'linktap' | 'poller' | 'scheduler' | 'push' | 'gcal'>;
-  /** Poller + scheduler on (ENGINE_ENABLED). Push, gcal and timers run either way. */
+  /** Scheduler on (ENGINE_ENABLED): Hoseidon may start runs itself. */
   engineEnabled: boolean;
+  /**
+   * Poller on (LinkTap reads: devices, live status, history). Defaults to engineEnabled; the
+   * Durable Object keeps it on whenever it can reach LinkTap, so "engine off" still monitors.
+   * Push, gcal and timers run either way.
+   */
+  pollingEnabled?: boolean;
   log?: (msg: string) => void;
 }
 
@@ -104,7 +110,7 @@ export class Wheel {
       const same = and(eq(timers.key, t.key), eq(timers.dueAt, t.dueAt));
       const [kind, arg] = splitKey(t.key);
       try {
-        if (kind === 'reconcile' && arg && this.o.engineEnabled) {
+        if (kind === 'reconcile' && arg && this.polling) {
           await poller.reconcileHistory(arg);
         } else if (kind !== 'reconcile') {
           this.o.log?.(`wheel: unknown timer ${t.key}`);
@@ -127,17 +133,22 @@ export class Wheel {
     }
   }
 
+  private get polling(): boolean {
+    return this.o.pollingEnabled ?? this.o.engineEnabled;
+  }
+
   // ---- due times ------------------------------------------------------------------------------
 
   /** When each task is next due (ms epoch), or null when it has nothing to do. */
   dueTimes(now: number): Record<TaskName, number | null> {
     const { engineEnabled } = this.o;
+    const polling = this.polling;
     return {
       timers: this.nextTimerAt(),
-      status: engineEnabled ? this.statusDue() : null,
+      status: polling ? this.statusDue() : null,
       engine: engineEnabled ? this.engineDue(now) : null,
-      devices: engineEnabled ? this.o.services.linktap.nextAvailableAt('devices').getTime() : null,
-      history: engineEnabled ? this.historyDue() : null,
+      devices: polling ? this.o.services.linktap.nextAvailableAt('devices').getTime() : null,
+      history: polling ? this.historyDue() : null,
       push: this.o.services.push.hasPending() ? now : null,
       gcal: this.o.services.gcal.nextDueAt(),
     };
