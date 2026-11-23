@@ -1,3 +1,4 @@
+import { chunkRows } from '../db/batch';
 import { and, desc, eq, gte, lte, ne } from 'drizzle-orm';
 import type { AlarmFlag, EventSeverity, RunSource, RunStatus, Watering } from '@hoseidon/shared';
 import type { Db } from '../db/types';
@@ -37,7 +38,7 @@ function formatDuration(ms: number): string {
 }
 
 export function insertEvents(db: Pick<Db, 'insert'>, rows: NewEvent[]): void {
-  if (rows.length) db.insert(events).values(rows).run();
+  for (const part of chunkRows(rows)) db.insert(events).values(part).run();
 }
 
 // ---- getAllDevices ------------------------------------------------------------------------------

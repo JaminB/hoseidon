@@ -1,3 +1,4 @@
+import { chunkIds } from '../db/batch';
 import { and, eq, gte, inArray, isNull, lte } from 'drizzle-orm';
 import type { Db } from '../db/types';
 import {
@@ -170,11 +171,8 @@ export function buildDesired(db: Db, opts: DesiredOptions): Desired[] {
   const runRows =
     opts.logRuns && runIds.length
       ? new Map(
-          db
-            .select()
-            .from(runs)
-            .where(inArray(runs.id, runIds))
-            .all()
+          chunkIds(runIds)
+            .flatMap((ids) => db.select().from(runs).where(inArray(runs.id, ids)).all())
             .map((r) => [r.id, r]),
         )
       : new Map();
