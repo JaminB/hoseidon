@@ -1,3 +1,5 @@
+import { getTableColumns, type Table } from 'drizzle-orm';
+
 /**
  * Cloudflare Durable Object SQLite allows at most 100 bound parameters per statement (Node's
  * SQLite allows far more, so tests on Node never notice). Split multi-row inserts and long IN
@@ -5,10 +7,17 @@
  */
 export const MAX_SQL_VARS = 100;
 
-/** Split rows so rows-per-chunk x columns stays under MAX_SQL_VARS (with one spare). */
-export function chunkRows<T extends object>(rows: T[]): T[][] {
+/**
+ * Split rows so rows-per-chunk x columns stays under MAX_SQL_VARS (with one spare). Drizzle binds
+ * a value for every column of the table (unset ones too), so pass the table to count them.
+ */
+export function chunkRows<T extends object>(rows: T[], table?: Table): T[][] {
   if (!rows.length) return [];
-  const cols = Math.max(1, ...rows.map((r) => Object.keys(r).length));
+  const cols = Math.max(
+    1,
+    table ? Object.keys(getTableColumns(table)).length : 0,
+    ...rows.map((r) => Object.keys(r).length),
+  );
   return chunk(rows, Math.max(1, Math.floor((MAX_SQL_VARS - 1) / cols)));
 }
 

@@ -150,7 +150,13 @@ export function scheduleRoutes({
       .values({ ...values, effectiveFrom: now, updatedAt: now })
       .returning()
       .get();
-    scheduler?.rematerialize(row.id, now);
+    try {
+      scheduler?.rematerialize(row.id, now);
+    } catch (err) {
+      // Don't leave a half-made schedule behind (the client will retry and make duplicates).
+      db.delete(schedules).where(eq(schedules.id, row.id)).run();
+      throw err;
+    }
     onChange();
     return c.json(present(row), 201);
   });
