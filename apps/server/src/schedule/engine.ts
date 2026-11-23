@@ -1,3 +1,4 @@
+import { chunkRows } from '../db/batch';
 import { and, asc, eq, gte, inArray, isNotNull, isNull, lt, lte, ne, or } from 'drizzle-orm';
 import type { PlannedRunStatus, RunStatus } from '@hoseidon/shared';
 import type { Db } from '../db/types';
@@ -341,7 +342,8 @@ export class SchedulerEngine {
           updatedAt: now,
         })),
       );
-      if (rows.length) db.insert(plannedRuns).values(rows).onConflictDoNothing().run();
+      for (const part of chunkRows(rows))
+        db.insert(plannedRuns).values(part).onConflictDoNothing().run();
     }
   }
 
