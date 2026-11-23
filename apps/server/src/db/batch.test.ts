@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
+import { getTableColumns } from 'drizzle-orm';
 import { MAX_SQL_VARS, chunkIds, chunkRows } from './batch';
+import { plannedRuns } from './schema';
 
 describe('chunkRows', () => {
   it('keeps every chunk under the Durable Object parameter limit', () => {
@@ -19,6 +21,13 @@ describe('chunkRows', () => {
     const chunks = chunkRows(rows);
     expect(chunks.flat()).toEqual(rows);
     for (const c of chunks) expect(c.length * 11).toBeLessThan(MAX_SQL_VARS);
+  });
+
+  it('counts every table column, not just the fields given', () => {
+    const rows = Array.from({ length: 40 }, (_, i) => ({ deviceId: `d${i}` }));
+    const cols = Object.keys(getTableColumns(plannedRuns)).length;
+    for (const c of chunkRows(rows, plannedRuns))
+      expect(c.length * cols).toBeLessThan(MAX_SQL_VARS);
   });
 
   it('handles empty and tiny inputs', () => {

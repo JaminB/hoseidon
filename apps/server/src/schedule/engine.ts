@@ -342,7 +342,7 @@ export class SchedulerEngine {
           updatedAt: now,
         })),
       );
-      for (const part of chunkRows(rows))
+      for (const part of chunkRows(rows, plannedRuns))
         db.insert(plannedRuns).values(part).onConflictDoNothing().run();
     }
   }

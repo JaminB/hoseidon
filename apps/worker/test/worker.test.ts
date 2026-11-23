@@ -253,6 +253,32 @@ describe('Worker (local workerd, mock LinkTap)', () => {
     expect(planned[0]!.n).toBeGreaterThan(0);
   });
 
+  it('plans a many-cycle, many-zone schedule (DO SQLite 100-parameter limit)', async () => {
+    const cookie = await login();
+    await firstPoll();
+    const res = await server.fetch('/api/schedules', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', cookie, origin: base, ...CSRF },
+      body: JSON.stringify({
+        name: 'Cycle and soak',
+        rrule: 'FREQ=DAILY',
+        dtstart: '2026-06-10T06:00',
+        timezone: 'America/New_York',
+        items: ['B1C2D3E4F5A60011', 'B1C2D3E4F5A60012', 'B1C2D3E4F5A60013_1'].map((deviceId) => ({
+          deviceId,
+          seconds: 600,
+        })),
+        cycleSoak: { cycles: 5, soakMinutes: 2 },
+      }),
+    });
+    expect(res.status).toBe(201);
+    const { id } = (await res.json()) as { id: number };
+    const planned = await sql<{ n: number }>(
+      `select count(*) as n from planned_runs where schedule_id = ${Number(id)}`,
+    );
+    expect(planned[0]!.n).toBeGreaterThanOrEqual(15);
+  });
+
   it('accepts a LinkTap webhook with the right secret only', async () => {
     const hook = (secret: string) =>
       server.fetch(`/hooks/linktap/${secret}`, {

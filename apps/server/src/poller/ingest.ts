@@ -38,7 +38,7 @@ function formatDuration(ms: number): string {
 }
 
 export function insertEvents(db: Pick<Db, 'insert'>, rows: NewEvent[]): void {
-  for (const part of chunkRows(rows)) db.insert(events).values(part).run();
+  for (const part of chunkRows(rows, events)) db.insert(events).values(part).run();
 }
 
 // ---- getAllDevices ------------------------------------------------------------------------------
